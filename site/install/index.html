@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Install Aliaz</title>
+    <meta
+      name="description"
+      content="Install Aliaz from source today, with release installer notes for future tagged releases."
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="../assets/favicon-32.png"
+    />
+    <link
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="../assets/aliaz-icon-180.png"
+    />
+    <link rel="stylesheet" href="../pages.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div class="shell nav">
+          <a class="brand" href="../" aria-label="Aliaz home">
+            <span class="mark"
+              ><img src="../assets/aliaz-icon-180.png" alt=""
+            /></span>
+            <span>Aliaz</span>
+          </a>
+          <nav class="navlinks" aria-label="Main navigation">
+            <a href="../docs/">Docs</a>
+            <a class="active" href="./">Install</a>
+            <a href="../commands/">Commands</a>
+            <a href="../sync/">Sync</a>
+          </nav>
+          <div class="nav-actions">
+            <a class="btn" href="https://github.com/oshabana/aliaz">GitHub</a>
+            <a class="btn" href="https://buymeacoffee.com/aliaz">Support</a>
+            <a class="btn primary" href="#installer">Install</a>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section class="shell hero">
+          <div>
+            <div class="eyebrow"><span class="dot"></span> Installation</div>
+            <h1>Install the CLI first.</h1>
+            <p class="lead">
+              The fastest path is the release installer. It downloads the
+              matching binary for your platform and installs it to
+              <code>~/.local/bin</code> by default. Aliaz is open source on
+              GitHub and MIT licensed.
+            </p>
+            <div class="actions">
+              <a class="btn primary" href="#installer">Copy installer</a>
+              <a class="btn" href="../docs/">Quickstart</a>
+            </div>
+          </div>
+          <aside class="hero-card">
+            <ul class="rule-list">
+              <li>
+                <code>01</code
+                ><span>No Rust required for release installs.</span>
+              </li>
+              <li>
+                <code>02</code
+                ><span
+                  >Release archives will support macOS and Linux.</span
+                >
+              </li>
+              <li>
+                <code>03</code
+                ><span>Run <code>aliaz --help</code> after install.</span>
+              </li>
+            </ul>
+          </aside>
+        </section>
+
+        <div class="shell layout">
+          <aside class="side-nav" aria-label="Install sections">
+            <div class="side-label">Install</div>
+            <a class="active" href="#installer">Release installer</a>
+            <a href="#options">Installer options</a>
+            <a href="#source">From source</a>
+            <a href="#verify">Verify</a>
+          </aside>
+
+          <article class="content">
+            <section id="installer">
+              <div class="kicker">Release installer</div>
+              <h2>One command for macOS and Linux.</h2>
+              <p>
+                This is the primary install path from the README. The script
+                chooses the release asset for the current platform and installs
+                the binary.
+              </p>
+              <div class="terminal">
+                <div class="terminal-head">
+                  <div class="lights" aria-hidden="true">
+                    <i></i><i></i><i></i>
+                  </div>
+                  <span>install</span>
+                </div>
+                <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | sh
+<span class="prompt">$</span> aliaz --help</code></pre>
+              </div>
+            </section>
+
+            <section id="options">
+              <div class="kicker">Options</div>
+              <h2>Pin the version or destination.</h2>
+              <div class="grid-2">
+                <div class="panel">
+                  <h3>Install a version</h3>
+                  <p>Set <code>ALIAZ_VERSION</code> before the shell script.</p>
+                  <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.0 sh</code></pre>
+                </div>
+                <div class="panel">
+                  <h3>Change install dir</h3>
+                  <p>
+                    Use <code>ALIAZ_INSTALL_DIR</code> for another binary path.
+                  </p>
+                  <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_DIR=/usr/local/bin sh</code></pre>
+                </div>
+              </div>
+            </section>
+
+            <section id="source">
+              <div class="kicker">Source</div>
+              <h2>Build with Cargo when you want local development.</h2>
+              <p>
+                Install Rust if needed, then install Aliaz from the open-source
+                GitHub repository checkout.
+              </p>
+              <div class="terminal">
+                <div class="terminal-head">
+                  <div class="lights" aria-hidden="true">
+                    <i></i><i></i><i></i>
+                  </div>
+                  <span>source build</span>
+                </div>
+                <pre><code><span class="prompt">$</span> cargo install --path .
+<span class="prompt">$</span> cargo run -- --help
+<span class="prompt">$</span> cargo run -- add gs "git status"</code></pre>
+              </div>
+            </section>
+
+            <section id="verify">
+              <div class="kicker">Verify</div>
+              <h2>Confirm the binary is available.</h2>
+              <p>
+                If the command is not found, add the install directory to your
+                <code>PATH</code> and open a new shell.
+              </p>
+              <div class="terminal">
+                <div class="terminal-head">
+                  <div class="lights" aria-hidden="true">
+                    <i></i><i></i><i></i>
+                  </div>
+                  <span>verify</span>
+                </div>
+                <pre><code><span class="prompt">$</span> aliaz --help
+<span class="dim">Manage shell aliases from a local SQLite-backed source of truth</span></code></pre>
+              </div>
+            </section>
+          </article>
+
+          <aside class="toc" aria-label="On this page">
+            <div class="side-label">On this page</div>
+            <a href="#installer">Release installer</a>
+            <a href="#options">Options</a>
+            <a href="#source">Source</a>
+            <a href="#verify">Verify</a>
+          </aside>
+        </div>
+
+        <section class="shell next">
+          <div class="next-grid">
+            <a class="next-card" href="../docs/"
+              ><strong>Next: Quickstart</strong>
+              <p>Add your first alias and initialize a shell.</p></a
+            >
+            <a class="next-card" href="../commands/"
+              ><strong>Command reference</strong>
+              <p>See every supported command.</p></a
+            >
+            <a class="next-card" href="../sync/"
+              ><strong>Sync setup</strong>
+              <p>Register, log in, and use a custom sync URL.</p></a
+            >
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <div class="shell footer-inner">
+          <a class="brand" href="../"
+            ><span class="mark"
+              ><img src="../assets/aliaz-icon-180.png" alt="" /></span
+            ><span>Aliaz</span></a
+          >
+          <div class="footer-links">
+            <a href="../docs/">Docs</a>
+            <a href="https://github.com/oshabana/aliaz">GitHub</a>
+            <a href="https://buymeacoffee.com/aliaz">Support</a>
+            <a href="../commands/">Commands</a>
+            <a href="../sync/">Sync</a>
+          </div>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

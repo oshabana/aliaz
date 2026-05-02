@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aliaz Sync and Security</title>
+    <meta
+      name="description"
+      content="Encrypted sync, recovery phrase, and privacy model for Aliaz."
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="../assets/favicon-32.png"
+    />
+    <link
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="../assets/aliaz-icon-180.png"
+    />
+    <link rel="stylesheet" href="../pages.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div class="shell nav">
+          <a class="brand" href="../" aria-label="Aliaz home">
+            <span class="mark"
+              ><img src="../assets/aliaz-icon-180.png" alt=""
+            /></span>
+            <span>Aliaz</span>
+          </a>
+          <nav class="navlinks" aria-label="Main navigation">
+            <a href="../docs/">Docs</a>
+            <a href="../install/">Install</a>
+            <a href="../commands/">Commands</a>
+            <a class="active" href="./">Sync</a>
+          </nav>
+          <div class="nav-actions">
+            <a class="btn" href="https://github.com/oshabana/aliaz">GitHub</a>
+            <a class="btn" href="https://buymeacoffee.com/aliaz">Support</a>
+            <a class="btn primary" href="../install/">Install</a>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section class="shell hero">
+          <div>
+            <div class="eyebrow">
+              <span class="dot"></span> Sync and privacy
+            </div>
+            <h1>Encrypted sync without server-side secrets.</h1>
+            <p class="lead">
+              Aliaz sync stores encrypted alias records on the server. The
+              open-source CLI encrypts alias names and commands on your machine
+              before upload, and the recovery phrase stays local.
+            </p>
+            <div class="actions">
+              <a class="btn primary" href="#setup">Set up sync</a>
+              <a class="btn" href="#security">Security model</a>
+            </div>
+          </div>
+          <aside class="hero-card">
+            <ul class="rule-list">
+              <li>
+                <code>local</code><span>Encryption happens before upload.</span>
+              </li>
+              <li>
+                <code>server</code
+                ><span>Stores encrypted records and metadata.</span>
+              </li>
+              <li>
+                <code>phrase</code
+                ><span>Required to decrypt on a new computer.</span>
+              </li>
+            </ul>
+          </aside>
+        </section>
+
+        <div class="shell layout">
+          <aside class="side-nav" aria-label="Sync sections">
+            <div class="side-label">Sync</div>
+            <a class="active" href="#setup">Setup</a>
+            <a href="#new-machine">New computer</a>
+            <a href="#security">Security model</a>
+            <a href="#server-sees">Server visibility</a>
+            <a href="#self-hosting">Custom server</a>
+          </aside>
+
+          <article class="content">
+            <section id="setup">
+              <div class="kicker">Setup</div>
+              <h2>Register once, then sync when you want.</h2>
+              <p>
+                Sync is optional. Local aliases work without an account. When
+                you register, Aliaz creates a recovery phrase locally and stores
+                it in the operating system credential store.
+              </p>
+              <div class="terminal">
+                <div class="terminal-head">
+                  <div class="lights" aria-hidden="true">
+                    <i></i><i></i><i></i>
+                  </div>
+                  <span>first machine</span>
+                </div>
+                <pre><code><span class="prompt">$</span> aliaz register --username ada
+<span class="dim">Password: </span>
+<span class="ok">Registered ada</span>
+<span class="dim">Recovery phrase: ...</span>
+
+<span class="prompt">$</span> aliaz sync
+<span class="ok">Synced: pulled 0, pushed 3, latest version 3</span></code></pre>
+              </div>
+              <div class="callout">
+                Save the recovery phrase somewhere durable. Aliaz cannot recover
+                encrypted aliases without it.
+              </div>
+            </section>
+
+            <section id="new-machine">
+              <div class="kicker">New computer</div>
+              <h2>Use password plus recovery phrase.</h2>
+              <p>
+                The password authenticates your account with the sync server.
+                The recovery phrase decrypts aliases locally after encrypted
+                records are downloaded.
+              </p>
+              <div class="terminal">
+                <div class="terminal-head">
+                  <div class="lights" aria-hidden="true">
+                    <i></i><i></i><i></i>
+                  </div>
+                  <span>new machine</span>
+                </div>
+                <pre><code><span class="prompt">$</span> aliaz login --username ada
+<span class="dim">Password: </span>
+<span class="dim">Recovery phrase: </span>
+
+<span class="prompt">$</span> aliaz sync
+<span class="prompt">$</span> aliaz init zsh</code></pre>
+              </div>
+            </section>
+
+            <section id="security">
+              <div class="kicker">Security model</div>
+              <h2>The server should not be able to read aliases.</h2>
+              <div class="grid-2">
+                <div class="panel">
+                  <h3>Protected</h3>
+                  <p>
+                    Alias names and commands are encrypted before upload. A
+                    database-only compromise should expose encrypted blobs, not
+                    readable aliases.
+                  </p>
+                </div>
+                <div class="panel">
+                  <h3>Local secret</h3>
+                  <p>
+                    The recovery phrase is never sent to the sync server. It is
+                    used on the client to derive the key that decrypts aliases.
+                  </p>
+                </div>
+              </div>
+              <div class="callout">
+                Practical rule: if someone only gets the sync database, they
+                should not be able to read your aliases. If they get your
+                recovery phrase or control your computer, they can.
+              </div>
+            </section>
+
+            <section id="server-sees">
+              <div class="kicker">Server visibility</div>
+              <h2>Metadata is visible; alias contents are not.</h2>
+              <p>
+                The sync service needs operational metadata to authenticate
+                accounts and order records. It can see usernames, user IDs,
+                password hashes, session token hashes, record IDs, record type,
+                versions, timestamps, rate-limit counters, and encrypted blobs.
+              </p>
+              <p>
+                This can reveal that an account exists, how many records it has,
+                and roughly when records changed. It should not reveal plaintext
+                alias names or commands.
+              </p>
+            </section>
+
+            <section id="self-hosting">
+              <div class="kicker">Custom server</div>
+              <h2>Point sync at another compatible server.</h2>
+              <p>
+                A custom server changes who operates the metadata and encrypted
+                blob storage. It does not change the client-side encryption
+                model.
+              </p>
+              <p>
+                The GitHub repository includes the Cloudflare Worker source and
+                D1 migrations for the hosted sync API.
+              </p>
+              <div class="terminal">
+                <div class="terminal-head">
+                  <div class="lights" aria-hidden="true">
+                    <i></i><i></i><i></i>
+                  </div>
+                  <span>custom sync url</span>
+                </div>
+                <pre><code><span class="prompt">$</span> aliaz register --username ada --sync-url https://sync.example.com
+<span class="prompt">$</span> aliaz login --username ada --sync-url https://sync.example.com</code></pre>
+              </div>
+              <p class="support-note">
+                Community support helps keep the open-source sync service,
+                releases, and documentation maintained.
+              </p>
+            </section>
+          </article>
+
+          <aside class="toc" aria-label="On this page">
+            <div class="side-label">On this page</div>
+            <a href="#setup">Setup</a>
+            <a href="#new-machine">New computer</a>
+            <a href="#security">Security model</a>
+            <a href="#server-sees">Server visibility</a>
+            <a href="#self-hosting">Custom server</a>
+          </aside>
+        </div>
+
+        <section class="shell next">
+          <div class="next-grid">
+            <a class="next-card" href="../docs/"
+              ><strong>Docs</strong>
+              <p>Walk through everyday usage.</p></a
+            >
+            <a class="next-card" href="../commands/"
+              ><strong>Commands</strong>
+              <p>Read the command reference.</p></a
+            >
+            <a class="next-card" href="../install/"
+              ><strong>Install</strong>
+              <p>Get the CLI onto your machine.</p></a
+            >
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <div class="shell footer-inner">
+          <a class="brand" href="../"
+            ><span class="mark"
+              ><img src="../assets/aliaz-icon-180.png" alt="" /></span
+            ><span>Aliaz</span></a
+          >
+          <div class="footer-links">
+            <a href="../docs/">Docs</a>
+            <a href="../install/">Install</a>
+            <a href="../commands/">Commands</a>
+            <a href="https://github.com/oshabana/aliaz">GitHub</a>
+            <a href="https://buymeacoffee.com/aliaz">Support</a>
+          </div>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

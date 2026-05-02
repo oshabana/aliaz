@@ -1,0 +1,1664 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aliaz - Open-source alias management for the CLI</title>
+    <meta
+      name="description"
+      content="Aliaz is a local-first shell alias manager with optional encrypted sync for shell users."
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="assets/favicon-32.png"
+    />
+    <link
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="assets/aliaz-icon-180.png"
+    />
+    <style>
+      :root {
+        --bg: oklch(99% 0.002 240);
+        --surface: oklch(100% 0 0);
+        --fg: oklch(18% 0.012 250);
+        --muted: oklch(54% 0.012 250);
+        --border: oklch(92% 0.005 250);
+        --accent: oklch(58% 0.18 255);
+        --dark-bg: oklch(13% 0.012 250);
+        --dark-panel: oklch(17% 0.014 250);
+        --dark-panel-2: oklch(20% 0.018 250);
+        --dark-fg: oklch(94% 0.006 250);
+        --dark-muted: oklch(68% 0.012 250);
+        --dark-border: oklch(29% 0.014 250);
+        --dark-line: oklch(25% 0.014 250);
+        --terminal: oklch(9% 0.012 250);
+        --accent-ui: var(--accent);
+        --accent-soft: oklch(58% 0.18 255 / 14%);
+        --success: oklch(72% 0.15 150);
+        --warning: oklch(79% 0.12 80);
+        --danger: oklch(66% 0.16 28);
+        --font-display:
+          -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui,
+          sans-serif;
+        --font-body:
+          -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
+          sans-serif;
+        --mono:
+          "JetBrains Mono", "IBM Plex Mono", "SFMono-Regular", ui-monospace,
+          Menlo, monospace;
+        --max: 1180px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+        scroll-padding-top: 84px;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(
+            circle at 50% -10%,
+            oklch(24% 0.04 255 / 34%),
+            transparent 34rem
+          ),
+          linear-gradient(
+            180deg,
+            oklch(13% 0.012 250),
+            oklch(11% 0.012 250) 48rem,
+            oklch(14% 0.012 250)
+          );
+        color: var(--dark-fg);
+        font-family: var(--font-body);
+        letter-spacing: 0;
+        text-rendering: optimizeLegibility;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      code,
+      pre {
+        font-family: var(--mono);
+      }
+
+      h1,
+      h2,
+      h3,
+      h4,
+      p {
+        margin-top: 0;
+      }
+
+      figure {
+        margin: 0;
+      }
+
+      .page {
+        overflow: hidden;
+      }
+
+      .shell {
+        width: min(var(--max), calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        border-bottom: 1px solid oklch(100% 0 0 / 8%);
+        background: oklch(13% 0.012 250 / 78%);
+        backdrop-filter: blur(18px);
+      }
+
+      .nav {
+        min-height: 68px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 17px;
+        font-weight: 650;
+      }
+
+      .mark {
+        width: 28px;
+        height: 28px;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--dark-border);
+        border-radius: 7px;
+        background: linear-gradient(
+          180deg,
+          oklch(22% 0.018 250),
+          oklch(15% 0.014 250)
+        );
+        color: var(--accent-ui);
+        font-family: var(--mono);
+        font-size: 13px;
+        overflow: hidden;
+      }
+
+      .mark img {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: cover;
+      }
+
+      .navlinks,
+      .nav-actions,
+      .hero-actions,
+      .footer-links,
+      .pill-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .navlinks {
+        gap: 6px;
+        color: var(--dark-muted);
+        font-size: 14px;
+      }
+
+      .navlinks a {
+        padding: 9px 11px;
+        border-radius: 8px;
+      }
+
+      .navlinks a:hover {
+        color: var(--dark-fg);
+        background: oklch(100% 0 0 / 5%);
+      }
+
+      .navlinks a:focus-visible,
+      .footer-links a:focus-visible,
+      .docs-link:focus-visible,
+      .btn:focus-visible {
+        outline: 2px solid var(--accent-ui);
+        outline-offset: 3px;
+      }
+
+      .btn {
+        min-height: 40px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border: 1px solid var(--dark-border);
+        border-radius: 8px;
+        padding: 0 14px;
+        color: var(--dark-fg);
+        background: oklch(100% 0 0 / 4%);
+        font-size: 14px;
+        font-weight: 560;
+        transition:
+          transform 160ms ease,
+          border-color 160ms ease,
+          background 160ms ease;
+      }
+
+      .btn:hover {
+        transform: translateY(-1px);
+        border-color: oklch(58% 0.18 255 / 58%);
+        background: oklch(100% 0 0 / 7%);
+      }
+
+      .btn.primary {
+        border-color: oklch(58% 0.18 255 / 70%);
+        background: var(--accent-ui);
+        color: oklch(8% 0.012 250);
+        box-shadow: 0 0 0 3px oklch(58% 0.18 255 / 12%);
+      }
+
+      .btn.small {
+        min-height: 32px;
+        padding: 0 10px;
+        font-size: 12px;
+      }
+
+      .hero {
+        min-height: min(760px, calc(100vh - 68px));
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(420px, 0.95fr);
+        align-items: center;
+        gap: 52px;
+        padding: 66px 0 78px;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        width: fit-content;
+        margin-bottom: 24px;
+        padding: 7px 10px;
+        border: 1px solid var(--dark-border);
+        border-radius: 999px;
+        color: var(--dark-muted);
+        background: oklch(100% 0 0 / 4%);
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+
+      .dot {
+        width: 7px;
+        height: 7px;
+        flex: 0 0 auto;
+        border-radius: 50%;
+        background: var(--accent-ui);
+        box-shadow: 0 0 18px var(--accent-ui);
+      }
+
+      h1 {
+        max-width: 10ch;
+        margin-bottom: 22px;
+        font-family: var(--font-display);
+        font-size: clamp(52px, 6.8vw, 96px);
+        line-height: 0.93;
+        letter-spacing: 0;
+        text-wrap: balance;
+      }
+
+      .lead {
+        max-width: 600px;
+        margin-bottom: 34px;
+        color: var(--dark-muted);
+        font-size: clamp(18px, 2vw, 22px);
+        line-height: 1.55;
+        text-wrap: pretty;
+      }
+
+      .hero-actions {
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .meta-row {
+        display: grid;
+        grid-template-columns: repeat(2, max-content);
+        gap: 10px 16px;
+        margin-top: 34px;
+        padding: 0;
+        color: var(--dark-muted);
+        font-family: var(--mono);
+        font-size: 12px;
+        list-style: none;
+      }
+
+      .meta-row li {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .terminal-wrap {
+        position: relative;
+        min-width: 0;
+      }
+
+      .terminal-wrap::before {
+        content: "";
+        position: absolute;
+        inset: -28px;
+        border: 1px solid oklch(58% 0.18 255 / 14%);
+        border-radius: 28px;
+        background:
+          linear-gradient(
+            90deg,
+            transparent 23px,
+            oklch(100% 0 0 / 3%) 24px,
+            transparent 25px
+          ),
+          linear-gradient(
+            180deg,
+            transparent 23px,
+            oklch(100% 0 0 / 3%) 24px,
+            transparent 25px
+          );
+        background-size: 48px 48px;
+        mask-image: linear-gradient(
+          90deg,
+          transparent,
+          black 8%,
+          black 92%,
+          transparent
+        );
+      }
+
+      .terminal,
+      .panel,
+      .install-card,
+      .step,
+      .flow,
+      .node,
+      .feature-index,
+      .notes-panel,
+      .docs-preview,
+      .system-panel,
+      .oss-panel,
+      .faq-item {
+        border: 1px solid var(--dark-border);
+        border-radius: 12px;
+        background: var(--dark-panel);
+      }
+
+      .terminal {
+        position: relative;
+        overflow: hidden;
+        border-radius: 14px;
+        background: var(--terminal);
+        box-shadow: 0 28px 80px oklch(0% 0 0 / 42%);
+      }
+
+      .terminal-head {
+        min-height: 46px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 0 16px;
+        border-bottom: 1px solid var(--dark-line);
+        background: linear-gradient(
+          180deg,
+          oklch(20% 0.014 250),
+          oklch(15% 0.014 250)
+        );
+        color: var(--dark-muted);
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+
+      .lights {
+        display: flex;
+        gap: 7px;
+      }
+
+      .lights i {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: var(--dark-border);
+      }
+
+      .lights i:nth-child(1) {
+        background: oklch(65% 0.18 28);
+      }
+
+      .lights i:nth-child(2) {
+        background: oklch(78% 0.14 82);
+      }
+
+      .lights i:nth-child(3) {
+        background: oklch(72% 0.15 150);
+      }
+
+      .terminal-body,
+      pre {
+        margin: 0;
+        overflow-x: auto;
+        padding: 22px;
+        color: oklch(90% 0.006 250);
+        font-family: var(--mono);
+        font-size: 14px;
+        line-height: 1.75;
+      }
+
+      .cmd {
+        color: var(--dark-fg);
+      }
+
+      .prompt,
+      .ok {
+        color: var(--accent-ui);
+      }
+
+      .comment {
+        color: oklch(57% 0.018 250);
+      }
+
+      .dim {
+        color: var(--dark-muted);
+      }
+
+      .sync-map {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        align-items: center;
+        gap: 14px;
+        margin: 20px 22px 22px;
+        padding: 16px;
+        border: 1px solid var(--dark-line);
+        border-radius: 10px;
+        background: oklch(100% 0 0 / 3%);
+        color: var(--dark-muted);
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+
+      .machine {
+        min-width: 0;
+        padding: 12px;
+        border: 1px solid var(--dark-line);
+        border-radius: 8px;
+        background: oklch(9% 0.012 250);
+      }
+
+      .machine strong {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--dark-fg);
+        font-family: var(--font-body);
+        font-size: 13px;
+      }
+
+      .arrow {
+        color: var(--accent-ui);
+        font-size: 18px;
+      }
+
+      section {
+        padding: 90px 0;
+        border-top: 1px solid oklch(100% 0 0 / 7%);
+      }
+
+      .section-head {
+        display: grid;
+        grid-template-columns: minmax(0, 0.8fr) minmax(260px, 0.55fr);
+        gap: 48px;
+        align-items: end;
+        margin-bottom: 36px;
+      }
+
+      .kicker {
+        margin-bottom: 13px;
+        color: var(--accent-ui);
+        font-family: var(--mono);
+        font-size: 12px;
+        text-transform: uppercase;
+      }
+
+      h2 {
+        margin-bottom: 0;
+        font-size: clamp(34px, 4.6vw, 64px);
+        line-height: 1;
+        letter-spacing: 0;
+        text-wrap: balance;
+      }
+
+      .section-copy {
+        margin-bottom: 0;
+        color: var(--dark-muted);
+        font-size: 17px;
+        line-height: 1.6;
+      }
+
+      .install-card {
+        overflow: hidden;
+        border-radius: 14px;
+        box-shadow: 0 18px 70px oklch(0% 0 0 / 22%);
+      }
+
+      .install-note {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 15px 18px;
+        border-top: 1px solid var(--dark-border);
+        color: var(--dark-muted);
+        background: oklch(100% 0 0 / 3%);
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .install-note code {
+        flex: 0 0 auto;
+        border-color: oklch(58% 0.18 255 / 34%);
+        color: var(--dark-fg);
+        font-size: 12px;
+      }
+
+      .code-toolbar {
+        min-height: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 18px;
+        border-bottom: 1px solid var(--dark-border);
+        color: var(--dark-muted);
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        border: 1px solid var(--dark-border);
+        border-radius: 7px;
+        padding: 0 9px;
+        color: var(--dark-muted);
+        background: oklch(100% 0 0 / 4%);
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+
+      .grid-3 {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .step {
+        min-height: 260px;
+        padding: 20px;
+        background: linear-gradient(
+          180deg,
+          oklch(100% 0 0 / 5%),
+          oklch(100% 0 0 / 2%)
+        );
+      }
+
+      .step-num {
+        width: 28px;
+        height: 28px;
+        display: inline-grid;
+        place-items: center;
+        margin-bottom: 46px;
+        border: 1px solid oklch(58% 0.18 255 / 38%);
+        border-radius: 8px;
+        color: var(--accent-ui);
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+
+      .step h3 {
+        margin-bottom: 10px;
+        font-size: 22px;
+        letter-spacing: 0;
+      }
+
+      .step p,
+      .feature-row p,
+      .notes-panel p,
+      .docs-content p,
+      .system-panel p,
+      .oss-panel p,
+      .faq-item p {
+        margin-bottom: 0;
+        color: var(--dark-muted);
+        line-height: 1.6;
+      }
+
+      .flow {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: 1fr 80px 1fr 80px 1fr;
+        align-items: center;
+        margin-top: 16px;
+        padding: 20px;
+        background: oklch(100% 0 0 / 3%);
+      }
+
+      .node {
+        min-height: 112px;
+        padding: 18px;
+      }
+
+      .node small {
+        display: block;
+        margin-bottom: 22px;
+        color: var(--dark-muted);
+        font-family: var(--mono);
+      }
+
+      .node strong {
+        font-size: 18px;
+      }
+
+      .flow-line {
+        position: relative;
+        height: 1px;
+        background: linear-gradient(
+          90deg,
+          var(--dark-border),
+          var(--accent-ui),
+          var(--dark-border)
+        );
+      }
+
+      .feature-list {
+        display: grid;
+        grid-template-columns: 0.72fr 1.28fr;
+        gap: 42px;
+        align-items: start;
+      }
+
+      .feature-index {
+        position: sticky;
+        top: 92px;
+        padding: 20px;
+        background: oklch(100% 0 0 / 3%);
+      }
+
+      .feature-index p {
+        margin-bottom: 0;
+        color: var(--dark-muted);
+        line-height: 1.6;
+      }
+
+      .feature-row {
+        display: grid;
+        grid-template-columns: 170px minmax(0, 1fr);
+        gap: 28px;
+        padding: 26px 0;
+        border-bottom: 1px solid var(--dark-border);
+      }
+
+      .feature-row:first-child {
+        border-top: 1px solid var(--dark-border);
+      }
+
+      .feature-row code {
+        color: var(--accent-ui);
+        font-family: var(--mono);
+        font-size: 13px;
+      }
+
+      p code,
+      li code {
+        color: var(--dark-fg);
+        font-family: var(--mono);
+        font-size: 0.92em;
+      }
+
+      .feature-row h3 {
+        margin-bottom: 9px;
+        font-size: 24px;
+      }
+
+      .cli-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 0.94fr) minmax(360px, 0.62fr);
+        gap: 18px;
+      }
+
+      .cli-panel pre {
+        min-height: 508px;
+      }
+
+      .notes-panel {
+        padding: 20px;
+        background: oklch(100% 0 0 / 3%);
+      }
+
+      .note {
+        margin-bottom: 20px;
+        padding-bottom: 20px;
+        border-bottom: 1px solid var(--dark-border);
+      }
+
+      .note:last-child {
+        margin-bottom: 0;
+        padding-bottom: 0;
+        border-bottom: 0;
+      }
+
+      .note strong {
+        display: block;
+        margin-bottom: 8px;
+      }
+
+      .docs-preview {
+        min-height: 600px;
+        display: grid;
+        grid-template-columns: 230px minmax(0, 1fr) 200px;
+        overflow: hidden;
+      }
+
+      .docs-side,
+      .docs-toc {
+        padding: 18px;
+        background: oklch(14% 0.012 250);
+      }
+
+      .docs-side {
+        border-right: 1px solid var(--dark-border);
+      }
+
+      .docs-toc {
+        border-left: 1px solid var(--dark-border);
+      }
+
+      .docs-label {
+        margin-bottom: 12px;
+        color: var(--dark-muted);
+        font-family: var(--mono);
+        font-size: 11px;
+        text-transform: uppercase;
+      }
+
+      .docs-link,
+      .toc-link {
+        display: block;
+        border-radius: 7px;
+        color: var(--dark-muted);
+        font-size: 14px;
+      }
+
+      .docs-link {
+        padding: 9px 10px;
+      }
+
+      .toc-link {
+        margin-bottom: 11px;
+        font-size: 13px;
+      }
+
+      .docs-link.active {
+        color: var(--dark-fg);
+        background: var(--accent-soft);
+      }
+
+      .toc-link.active {
+        color: var(--accent-ui);
+      }
+
+      .docs-content {
+        min-width: 0;
+        padding: 34px 38px;
+      }
+
+      .docs-content h3 {
+        margin-bottom: 12px;
+        font-size: 34px;
+        letter-spacing: 0;
+      }
+
+      .callout {
+        margin: 24px 0;
+        padding: 16px;
+        border: 1px solid oklch(58% 0.18 255 / 32%);
+        border-radius: 10px;
+        background: var(--accent-soft);
+        color: oklch(86% 0.05 255);
+        line-height: 1.55;
+      }
+
+      .mini-code {
+        margin-top: 22px;
+        border: 1px solid var(--dark-border);
+        border-radius: 10px;
+        background: var(--terminal);
+      }
+
+      .system-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .system-panel {
+        min-height: 180px;
+        padding: 18px;
+      }
+
+      .system-panel h3 {
+        margin-bottom: 14px;
+        font-size: 18px;
+      }
+
+      .system-tag {
+        display: inline-flex;
+        margin-bottom: 18px;
+        color: var(--accent-ui);
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+
+      .oss-panel {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 320px;
+        gap: 28px;
+        align-items: center;
+        padding: 34px;
+        background:
+          linear-gradient(120deg, oklch(100% 0 0 / 5%), transparent),
+          var(--dark-panel);
+      }
+
+      .oss-panel h2 {
+        font-size: clamp(34px, 4vw, 54px);
+      }
+
+      .repo-card {
+        padding: 18px;
+        border: 1px solid var(--dark-border);
+        border-radius: 10px;
+        background: oklch(10% 0.012 250);
+        font-family: var(--mono);
+        font-size: 13px;
+      }
+
+      .repo-card .repo-title {
+        margin-bottom: 14px;
+        color: var(--dark-fg);
+        font-family: var(--font-body);
+        font-size: 16px;
+        font-weight: 650;
+      }
+
+      .repo-stats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        margin-top: 18px;
+      }
+
+      .support-note {
+        margin-top: 16px;
+        color: var(--dark-muted);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .repo-stats div {
+        padding: 10px;
+        border: 1px solid var(--dark-border);
+        border-radius: 8px;
+        color: var(--dark-muted);
+      }
+
+      .faq-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .faq-item {
+        padding: 20px;
+        background: oklch(100% 0 0 / 3%);
+      }
+
+      .faq-item h3 {
+        margin-bottom: 10px;
+        font-size: 18px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 26px;
+        border: 1px solid var(--dark-border);
+        border-radius: 999px;
+        padding: 0 9px;
+        color: var(--dark-muted);
+        background: oklch(100% 0 0 / 4%);
+        font-family: var(--mono);
+        font-size: 11px;
+      }
+
+      .pill.ok {
+        border-color: oklch(72% 0.15 150 / 36%);
+        background: oklch(72% 0.15 150 / 10%);
+        color: var(--success);
+      }
+
+      .pill.info {
+        border-color: oklch(58% 0.18 255 / 36%);
+        background: var(--accent-soft);
+        color: var(--accent-ui);
+      }
+
+      footer {
+        padding: 34px 0 54px;
+        border-top: 1px solid oklch(100% 0 0 / 7%);
+        color: var(--dark-muted);
+      }
+
+      .footer-inner {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        font-size: 14px;
+      }
+
+      .footer-links {
+        gap: 18px;
+      }
+
+      @media (max-width: 980px) {
+        .hero,
+        .section-head,
+        .feature-list,
+        .cli-grid,
+        .oss-panel {
+          grid-template-columns: 1fr;
+        }
+
+        .hero {
+          min-height: 0;
+          gap: 54px;
+          padding-top: 58px;
+        }
+
+        .docs-preview {
+          grid-template-columns: 190px minmax(0, 1fr);
+        }
+
+        .docs-toc {
+          display: none;
+        }
+
+        .system-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .feature-index {
+          position: static;
+        }
+      }
+
+      @media (max-width: 740px) {
+        .shell {
+          width: min(100% - 28px, var(--max));
+        }
+
+        .nav {
+          min-height: auto;
+          align-items: flex-start;
+          padding: 14px 0;
+        }
+
+        .navlinks {
+          display: none;
+        }
+
+        .nav-actions .btn:not(.primary) {
+          display: none;
+        }
+
+        h1 {
+          font-size: clamp(46px, 15vw, 76px);
+        }
+
+        section {
+          padding: 66px 0;
+        }
+
+        .terminal-body,
+        pre {
+          font-size: 12px;
+        }
+
+        .meta-row {
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+
+        .terminal-wrap::before {
+          display: none;
+        }
+
+        .sync-map,
+        .docs-preview,
+        .flow {
+          grid-template-columns: 1fr;
+        }
+
+        .install-note {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .grid-3,
+        .faq-grid,
+        .system-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .flow-line {
+          width: 1px;
+          height: 42px;
+          margin: 0 auto;
+        }
+
+        .feature-row {
+          grid-template-columns: 1fr;
+          gap: 10px;
+        }
+
+        .docs-side {
+          border-right: 0;
+          border-bottom: 1px solid var(--dark-border);
+        }
+
+        .docs-content {
+          padding: 26px 20px;
+        }
+
+        .footer-inner {
+          flex-direction: column;
+        }
+
+        .footer-links {
+          flex-wrap: wrap;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div class="shell nav">
+          <a class="brand" href="./" aria-label="Aliaz home">
+            <span class="mark"
+              ><img src="assets/aliaz-icon-180.png" alt=""
+            /></span>
+            <span>Aliaz</span>
+          </a>
+          <nav class="navlinks" aria-label="Main navigation">
+            <a href="./docs/">Docs</a>
+            <a href="./install/">Install</a>
+            <a href="./commands/">Commands</a>
+            <a href="./sync/">Sync</a>
+          </nav>
+          <div class="nav-actions">
+            <a class="btn" href="https://github.com/oshabana/aliaz">GitHub</a>
+            <a class="btn" href="https://buymeacoffee.com/aliaz">Support</a>
+            <a class="btn primary" href="./install/">Get started</a>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section class="shell hero" aria-labelledby="hero-title">
+          <div>
+            <div class="eyebrow">
+              <span class="dot"></span>
+              Local-first alias manager for zsh, bash, and fish
+            </div>
+            <h1 id="hero-title">Shell aliases from one local store.</h1>
+            <p class="lead">
+              Aliaz stores aliases in SQLite, prints shell-safe definitions, and
+              writes managed integration files. Sync is optional, encrypted, and
+              only starts after registration or login.
+            </p>
+            <div class="hero-actions">
+              <a class="btn primary" href="./install/">Install now</a>
+              <a class="btn" href="./docs/">Read docs</a>
+            </div>
+            <ul class="meta-row">
+              <li><span class="dot"></span> SQLite local store</li>
+              <li>zsh, bash, and fish output</li>
+              <li>JSON import/export</li>
+              <li>optional encrypted sync</li>
+            </ul>
+          </div>
+
+          <div class="terminal-wrap">
+            <figure class="terminal" aria-label="Aliaz command line example">
+              <div class="terminal-head">
+                <div class="lights" aria-hidden="true">
+                  <i></i><i></i><i></i>
+                </div>
+                <span>~/workstation . zsh</span>
+              </div>
+              <div class="terminal-body">
+                <div>
+                  <span class="prompt">$</span>
+                  <span class="cmd">aliaz add gs "git status"</span>
+                </div>
+                <div class="ok">Added gs</div>
+                <div>
+                  <span class="prompt">$</span>
+                  <span class="cmd">aliaz list</span>
+                </div>
+                <div class="dim">gs git status</div>
+                <div>
+                  <span class="prompt">$</span>
+                  <span class="cmd">aliaz init zsh</span>
+                </div>
+                <div class="dim">Wrote ~/.config/aliaz/aliases.sh</div>
+                <div class="dim">Add this line to your zsh startup file:</div>
+                <div class="dim">source "$HOME/.config/aliaz/aliases.sh"</div>
+                <br />
+                <div class="comment"># optional sync</div>
+                <div>
+                  <span class="prompt">$</span>
+                  <span class="cmd">aliaz register --username ada</span>
+                </div>
+                <div class="ok">Registered ada</div>
+                <div class="dim">Recovery phrase: ...</div>
+                <div>
+                  <span class="prompt">$</span>
+                  <span class="cmd">aliaz sync</span>
+                </div>
+                <div class="ok">
+                  Synced: pulled 0, pushed 1, latest version 1
+                </div>
+              </div>
+              <figure class="sync-map" aria-label="Encrypted sync diagram">
+                <div class="machine">
+                  <strong>Laptop A</strong>
+                  <span>alias gs="git status"</span>
+                </div>
+                <div class="arrow">-&gt;</div>
+                <div class="machine">
+                  <strong>Encrypted records</strong>
+                  <span>sync account required</span>
+                </div>
+              </figure>
+            </figure>
+          </div>
+        </section>
+
+        <section id="install">
+          <div class="shell">
+            <div class="section-head">
+              <div>
+                <div class="kicker">Install</div>
+                <h2>Copy, paste, keep moving.</h2>
+              </div>
+              <p class="section-copy">
+                The release installer downloads the matching macOS or Linux
+                binary, verifies checksums when possible, and installs Aliaz to
+                <code>~/.local/bin</code> by default.
+              </p>
+            </div>
+
+            <div class="install-card">
+              <div>
+                <div class="code-toolbar">
+                  <span>release install</span>
+                  <span class="tag">macOS/Linux</span>
+                </div>
+                <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | sh
+<span class="prompt">$</span> aliaz add gs "git status"
+<span class="prompt">$</span> aliaz list
+<span class="prompt">$</span> aliaz init zsh
+<span class="prompt">$</span> aliaz register --username ada
+<span class="prompt">$</span> aliaz sync</code></pre>
+              </div>
+              <div class="install-note">
+                <span
+                  >Source builds are still supported for development and local
+                  testing.</span
+                >
+                <code>cargo install --path .</code>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div class="shell">
+            <div class="section-head">
+              <div>
+                <div class="kicker">How it works</div>
+                <h2>Three moving parts, no dotfile maze.</h2>
+              </div>
+              <p class="section-copy">
+                Aliaz treats aliases as small records: readable locally,
+                printable as shell-safe alias definitions, and encrypted before
+                optional sync.
+              </p>
+            </div>
+
+            <div class="grid-3">
+              <article class="step">
+                <span class="step-num">01</span>
+                <h3>Save aliases locally</h3>
+                <p>
+                  Add aliases from the CLI and keep the canonical source in
+                  Aliaz instead of scattering edits across shell profiles.
+                </p>
+              </article>
+              <article class="step">
+                <span class="step-num">02</span>
+                <h3>Sync encrypted data</h3>
+                <p>
+                  Register or log in to a sync account, then push and pull
+                  encrypted alias records with <code>aliaz sync</code>.
+                </p>
+              </article>
+              <article class="step">
+                <span class="step-num">03</span>
+                <h3>Initialize your shell</h3>
+                <p>
+                  Generate stdout output with <code>aliaz generate</code>, or
+                  write managed zsh, bash, and fish files with
+                  <code>aliaz init</code>.
+                </p>
+              </article>
+              <figure class="flow" aria-label="Alias sync flow">
+                <div class="node">
+                  <small>device</small>
+                  <strong>MacBook</strong><br />
+                  <span class="dim">local aliases</span>
+                </div>
+                <div class="flow-line"></div>
+                <div class="node">
+                  <small>sync</small>
+                  <strong>encrypted bundle</strong><br />
+                  <span class="dim">sync account data</span>
+                </div>
+                <div class="flow-line"></div>
+                <div class="node">
+                  <small>device</small>
+                  <strong>Linux box</strong><br />
+                  <span class="dim">zsh . bash . fish</span>
+                </div>
+              </figure>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div class="shell feature-list">
+            <div class="feature-index">
+              <div class="kicker">Command surface</div>
+              <h2>What the current CLI supports.</h2>
+              <p>
+                The first workflow is local alias management. Sync, recovery,
+                and self-hosting are available when you need multiple machines.
+              </p>
+            </div>
+            <div>
+              <article class="feature-row">
+                <code>shells</code>
+                <div>
+                  <h3>Works with zsh, bash, and fish</h3>
+                  <p>
+                    Generate shell-specific alias files while keeping one
+                    portable alias source.
+                  </p>
+                </div>
+              </article>
+              <article class="feature-row">
+                <code>sync</code>
+                <div>
+                  <h3>Aliases follow you across devices</h3>
+                  <p>
+                    Register once, save the recovery phrase, log in on another
+                    machine, and run sync to pull encrypted alias records.
+                  </p>
+                </div>
+              </article>
+              <article class="feature-row">
+                <code>recovery</code>
+                <div>
+                  <h3>Recovery phrase protected</h3>
+                  <p>
+                    Aliaz stores the phrase in the OS credential store and
+                    prints it once during registration. Without it, encrypted
+                    aliases cannot be recovered.
+                  </p>
+                </div>
+              </article>
+              <article class="feature-row">
+                <code>self-host</code>
+                <div>
+                  <h3>Bring your own sync URL</h3>
+                  <p>
+                    <code>register</code> and <code>login</code> accept
+                    <code>--sync-url</code>, and the repository includes the
+                    Worker and D1 migrations for the sync service.
+                  </p>
+                </div>
+              </article>
+              <article class="feature-row">
+                <code>weight</code>
+                <div>
+                  <h3>Local-first by default</h3>
+                  <p>
+                    The core workflow is local: add, list, edit, delete, migrate
+                    from <code>.zshrc</code>, import/export JSON, and check
+                    setup with status or doctor.
+                  </p>
+                </div>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div class="shell">
+            <div class="section-head">
+              <div>
+                <div class="kicker">CLI preview</div>
+                <h2>Real commands, real outputs.</h2>
+              </div>
+              <p class="section-copy">
+                The examples mirror the current CLI output: local commands work
+                without an account, while sync starts after
+                <code>register</code> or <code>login</code>.
+              </p>
+            </div>
+
+            <div class="cli-grid">
+              <div class="cli-panel terminal">
+                <div class="terminal-head">
+                  <div class="lights" aria-hidden="true">
+                    <i></i><i></i><i></i>
+                  </div>
+                  <span>aliaz quickstart</span>
+                </div>
+                <pre><code><span class="prompt">$</span> aliaz register --username ada
+<span class="ok">Registered ada</span>
+<span class="dim">Recovery phrase: ...</span>
+
+<span class="prompt">$</span> aliaz add gl "git log --oneline --decorate"
+<span class="ok">Added gl</span>
+
+<span class="prompt">$</span> aliaz list
+<span class="dim">gs</span>  git status
+<span class="dim">gl</span>  git log --oneline --decorate
+<span class="dim">dc</span>  docker compose
+
+<span class="prompt">$</span> aliaz sync
+<span class="ok">Synced: pulled 0, pushed 3, latest version 3</span>
+
+<span class="prompt">$</span> aliaz init zsh
+<span class="dim">Wrote ~/.config/aliaz/aliases.sh</span>
+<span class="dim">Add this line to your zsh startup file:</span>
+<span class="dim">source "$HOME/.config/aliaz/aliases.sh"</span></code></pre>
+              </div>
+              <aside class="notes-panel" aria-label="CLI notes">
+                <div class="note">
+                  <strong>Account only for sync</strong>
+                  <p>
+                    Add, list, edit, delete, generate, init, migrate, import,
+                    export, status, and doctor work locally.
+                  </p>
+                </div>
+                <div class="note">
+                  <strong>Recovery phrase matters</strong>
+                  <p>
+                    Registration prints the phrase once. Aliaz cannot recover
+                    encrypted aliases without it.
+                  </p>
+                </div>
+                <div class="note">
+                  <strong>Shell files are generated</strong>
+                  <p>
+                    Use <code>generate</code> for stdout or <code>init</code>
+                    for managed zsh, bash, and fish integration files.
+                  </p>
+                </div>
+                <div class="note">
+                  <strong>JSON is portable</strong>
+                  <p>
+                    <code>aliaz export</code> writes JSON, and
+                    <code>aliaz import</code> upserts aliases by name.
+                  </p>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </section>
+
+        <section id="docs">
+          <div class="shell">
+            <div class="section-head">
+              <div>
+                <div class="kicker">Docs preview</div>
+                <h2>Docs start with the local workflow.</h2>
+              </div>
+              <p class="section-copy">
+                The docs preview follows the current command set: install,
+                quickstart, shell integration, migration, import/export, sync,
+                status, and doctor.
+              </p>
+            </div>
+
+            <div class="docs-preview">
+              <aside class="docs-side" aria-label="Docs navigation">
+                <div class="docs-label">Aliaz docs</div>
+                <span class="docs-link active" aria-current="page"
+                  >Introduction</span
+                >
+                <a class="docs-link" href="./install/">Installation</a>
+                <a class="docs-link" href="./docs/">Quickstart</a>
+                <a class="docs-link" href="./commands/">Commands</a>
+                <a class="docs-link" href="./sync/">Sync and recovery</a>
+                <a class="docs-link" href="./sync/">Self-hosting</a>
+              </aside>
+              <article class="docs-content">
+                <div class="docs-label">Introduction</div>
+                <h3>Manage aliases without hand-editing every profile.</h3>
+                <p>
+                  Aliaz stores aliases locally in SQLite. You can print
+                  shell-safe definitions with <code>generate</code>, or write
+                  managed shell integration files with <code>init</code>.
+                </p>
+                <div class="callout">
+                  <strong>Sync is optional:</strong> local alias management
+                  works without an account. Register only when you want
+                  encrypted records shared through a sync server.
+                </div>
+                <h4>Quickstart</h4>
+                <p>
+                  Add an alias, inspect the local list, then initialize the
+                  shell integration for the current environment.
+                </p>
+                <div class="mini-code">
+                  <pre><code><span class="prompt">$</span> aliaz add gs "git status"
+<span class="prompt">$</span> aliaz list
+<span class="prompt">$</span> aliaz init fish
+<span class="prompt">$</span> aliaz doctor</code></pre>
+                </div>
+              </article>
+              <aside class="docs-toc" aria-label="Docs table of contents">
+                <div class="docs-label">On this page</div>
+                <span class="toc-link active">What Aliaz does</span>
+                <span class="toc-link">Install</span>
+                <span class="toc-link">First alias</span>
+                <span class="toc-link">Shell files</span>
+                <span class="toc-link">Recovery</span>
+              </aside>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div class="shell">
+            <div class="section-head">
+              <div>
+                <div class="kicker">Command coverage</div>
+                <h2>Local workflows stay scriptable.</h2>
+              </div>
+              <p class="section-copy">
+                Aliaz keeps every operation available from the CLI, including
+                shell generation, migration, JSON import/export, status, and
+                doctor checks.
+              </p>
+            </div>
+
+            <ul class="system-grid">
+              <li class="system-panel">
+                <span class="system-tag">SQLite</span>
+                <h3>Local store</h3>
+                <p>
+                  Aliases are stored in SQLite under the operating system's
+                  standard data directory.
+                </p>
+              </li>
+              <li class="system-panel">
+                <span class="system-tag">generate/init</span>
+                <h3>Shell output</h3>
+                <p>
+                  <code>generate</code> prints definitions; <code>init</code>
+                  writes managed files for zsh, bash, and fish.
+                </p>
+              </li>
+              <li class="system-panel">
+                <span class="system-tag">JSON</span>
+                <h3>Import/export</h3>
+                <p>
+                  JSON export can print to stdout or write a file. Import
+                  upserts aliases by name.
+                </p>
+              </li>
+              <li class="system-panel">
+                <span class="system-tag">status/doctor</span>
+                <h3>Status checks</h3>
+                <p>
+                  <code>status</code> reports local and sync state.
+                  <code>doctor</code> checks the database, integration files,
+                  sync config, and secret storage.
+                </p>
+              </li>
+            </ul>
+          </div>
+        </section>
+
+        <section id="github">
+          <div class="shell">
+            <div class="oss-panel">
+              <div>
+                <div class="kicker">Open source</div>
+                <h2>Open source CLI and sync server.</h2>
+                <p>
+                  Aliaz is an MIT-licensed open-source project. The GitHub
+                  repository includes the Rust CLI, the installer, a Cloudflare
+                  Worker sync API, D1 migrations, and tests.
+                </p>
+                <div class="hero-actions">
+                  <a
+                    class="btn primary"
+                    href="https://github.com/oshabana/aliaz"
+                  >
+                    View on GitHub
+                  </a>
+                  <a class="btn" href="./sync/">Read self-hosting docs</a>
+                  <a class="btn" href="https://buymeacoffee.com/aliaz">
+                    Buy me a coffee
+                  </a>
+                </div>
+                <p class="support-note">
+                  Support helps cover release work, documentation, sync hosting,
+                  and maintenance.
+                </p>
+              </div>
+              <figure class="repo-card" aria-label="GitHub repository preview">
+                <div class="repo-title">oshabana/aliaz</div>
+                <div class="dim">Open-source CLI alias sync</div>
+                <div class="repo-stats">
+                  <div>shells<br /><strong>3</strong></div>
+                  <div>sync<br /><strong>optional</strong></div>
+                  <div>license<br /><strong>MIT</strong></div>
+                </div>
+              </figure>
+            </div>
+          </div>
+        </section>
+
+        <section id="faq">
+          <div class="shell">
+            <div class="section-head">
+              <div>
+                <div class="kicker">FAQ</div>
+                <h2>Short answers for terminal users.</h2>
+              </div>
+              <p class="section-copy">
+                The important behavior is explicit: what sync encrypts, which
+                shells work, and what happens when recovery material is lost.
+              </p>
+            </div>
+
+            <div class="faq-grid">
+              <article class="faq-item">
+                <h3>How is this different from Atuin?</h3>
+                <p>
+                  Atuin focuses on shell history. Aliaz focuses on alias
+                  records: add, edit, delete, migrate, generate, initialize,
+                  import/export, and optional sync.
+                </p>
+              </article>
+              <article class="faq-item">
+                <h3>Does Aliaz support zsh, bash, and fish?</h3>
+                <p>
+                  Yes. Aliaz keeps one alias source and exports the file format
+                  your shell expects.
+                </p>
+              </article>
+              <article class="faq-item">
+                <h3>Is my data encrypted?</h3>
+                <p>
+                  Alias names and commands are encrypted before upload. Sync is
+                  optional and requires registration or login.
+                </p>
+              </article>
+              <article class="faq-item">
+                <h3>Can I self-host it?</h3>
+                <p>
+                  Yes. The repository includes Cloudflare Worker code and D1
+                  migrations for the sync service.
+                </p>
+              </article>
+              <article class="faq-item">
+                <h3>What happens if I lose my recovery phrase?</h3>
+                <p>
+                  Aliaz cannot recover encrypted aliases without it. Keep the
+                  phrase somewhere durable before depending on sync recovery.
+                </p>
+              </article>
+              <article class="faq-item">
+                <h3>Do I need a dotfiles repo?</h3>
+                <p>
+                  No. Aliaz can complement dotfiles, but the primary workflow is
+                  a local SQLite-backed alias source plus generated shell files.
+                </p>
+              </article>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <div class="shell footer-inner">
+          <a class="brand" href="./"
+            ><span class="mark"
+              ><img src="assets/aliaz-icon-180.png" alt="" /></span
+            ><span>Aliaz</span></a
+          >
+          <div class="footer-links">
+            <a href="./docs/">Docs</a>
+            <a href="https://github.com/oshabana/aliaz">GitHub</a>
+            <a href="https://buymeacoffee.com/aliaz">Support</a>
+            <a href="./install/">Install</a>
+          </div>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

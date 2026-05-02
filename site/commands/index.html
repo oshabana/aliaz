@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aliaz Commands</title>
+    <meta
+      name="description"
+      content="Command reference for the Aliaz shell alias manager."
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="../assets/favicon-32.png"
+    />
+    <link
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="../assets/aliaz-icon-180.png"
+    />
+    <link rel="stylesheet" href="../pages.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div class="shell nav">
+          <a class="brand" href="../" aria-label="Aliaz home">
+            <span class="mark"
+              ><img src="../assets/aliaz-icon-180.png" alt=""
+            /></span>
+            <span>Aliaz</span>
+          </a>
+          <nav class="navlinks" aria-label="Main navigation">
+            <a href="../docs/">Docs</a>
+            <a href="../install/">Install</a>
+            <a class="active" href="./">Commands</a>
+            <a href="../sync/">Sync</a>
+          </nav>
+          <div class="nav-actions">
+            <a class="btn" href="https://github.com/oshabana/aliaz">GitHub</a>
+            <a class="btn" href="https://buymeacoffee.com/aliaz">Support</a>
+            <a class="btn primary" href="../install/">Install</a>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section class="shell hero">
+          <div>
+            <div class="eyebrow">
+              <span class="dot"></span> Command reference
+            </div>
+            <h1>Small verbs, predictable output.</h1>
+            <p class="lead">
+              Aliaz keeps the open-source command surface compact: local alias
+              CRUD, shell output, migration, JSON portability, optional sync,
+              and health checks.
+            </p>
+            <div class="actions">
+              <a class="btn primary" href="#local">Local commands</a>
+              <a class="btn" href="#reference">Reference table</a>
+            </div>
+          </div>
+          <aside class="hero-card">
+            <ul class="rule-list">
+              <li>
+                <code>crud</code
+                ><span
+                  ><code>add</code>, <code>edit</code>, <code>rm</code>, and
+                  <code>list</code>.</span
+                >
+              </li>
+              <li>
+                <code>shell</code
+                ><span><code>generate</code> and <code>init</code>.</span>
+              </li>
+              <li>
+                <code>health</code
+                ><span><code>status</code> and <code>doctor</code>.</span>
+              </li>
+            </ul>
+          </aside>
+        </section>
+
+        <div class="shell layout">
+          <aside class="side-nav" aria-label="Command sections">
+            <div class="side-label">Commands</div>
+            <a class="active" href="#local">Local aliases</a>
+            <a href="#shell">Shell output</a>
+            <a href="#portable">Import/export</a>
+            <a href="#reference">Reference table</a>
+          </aside>
+
+          <article class="content">
+            <section id="local">
+              <div class="kicker">Local aliases</div>
+              <h2>Add, list, edit, and remove aliases.</h2>
+              <div class="terminal">
+                <div class="terminal-head">
+                  <div class="lights" aria-hidden="true">
+                    <i></i><i></i><i></i>
+                  </div>
+                  <span>local store</span>
+                </div>
+                <pre><code><span class="prompt">$</span> aliaz add gs "git status"
+<span class="ok">Added gs</span>
+
+<span class="prompt">$</span> aliaz list
+<span class="dim">gs	git status</span>
+
+<span class="prompt">$</span> aliaz edit gs "git status --short"
+<span class="ok">Updated gs</span>
+
+<span class="prompt">$</span> aliaz rm gs
+<span class="ok">Deleted gs</span></code></pre>
+              </div>
+            </section>
+
+            <section id="shell">
+              <div class="kicker">Shell output</div>
+              <h2>Print definitions or write integration files.</h2>
+              <p>
+                Supported shell values are <code>zsh</code>, <code>bash</code>,
+                and <code>fish</code>. <code>generate</code> prints to stdout;
+                <code>init</code> writes managed files.
+              </p>
+              <div class="grid-2">
+                <div class="panel">
+                  <h3>Generate</h3>
+                  <pre><code><span class="prompt">$</span> aliaz generate zsh
+<span class="dim">alias gs='git status'</span></code></pre>
+                </div>
+                <div class="panel">
+                  <h3>Initialize</h3>
+                  <pre><code><span class="prompt">$</span> aliaz init fish
+<span class="dim">Wrote ~/.config/fish/conf.d/aliaz.fish</span></code></pre>
+                </div>
+              </div>
+            </section>
+
+            <section id="portable">
+              <div class="kicker">Portability</div>
+              <h2>Migrate, export, and import.</h2>
+              <p>
+                Use migration for zsh-style alias files, and JSON import/export
+                when you want a portable file.
+              </p>
+              <div class="terminal">
+                <div class="terminal-head">
+                  <div class="lights" aria-hidden="true">
+                    <i></i><i></i><i></i>
+                  </div>
+                  <span>portable aliases</span>
+                </div>
+                <pre><code><span class="prompt">$</span> aliaz migrate --from ~/.zshrc
+<span class="prompt">$</span> aliaz export --output aliases.json
+<span class="prompt">$</span> aliaz import aliases.json</code></pre>
+              </div>
+            </section>
+
+            <section id="reference">
+              <div class="kicker">Reference</div>
+              <h2>Current command surface.</h2>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Command</th>
+                      <th>Purpose</th>
+                      <th>Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>add &lt;name&gt; &lt;command&gt;</code></td>
+                      <td>Create or update an alias.</td>
+                      <td>
+                        Names allow ASCII letters, numbers, <code>_</code>,
+                        <code>-</code>, and <code>.</code>.
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><code>list</code></td>
+                      <td>Print active aliases.</td>
+                      <td>Output is tab-separated.</td>
+                    </tr>
+                    <tr>
+                      <td><code>edit &lt;name&gt; &lt;command&gt;</code></td>
+                      <td>Update an alias command.</td>
+                      <td>Fails if the alias does not exist.</td>
+                    </tr>
+                    <tr>
+                      <td><code>rm &lt;name&gt;</code></td>
+                      <td>Delete an alias.</td>
+                      <td><code>delete</code> is accepted as an alias.</td>
+                    </tr>
+                    <tr>
+                      <td><code>migrate --from &lt;path&gt;</code></td>
+                      <td>Import zsh-style aliases.</td>
+                      <td>Defaults to <code>~/.zshrc</code>.</td>
+                    </tr>
+                    <tr>
+                      <td><code>generate &lt;shell&gt;</code></td>
+                      <td>Print shell aliases.</td>
+                      <td>Does not write files.</td>
+                    </tr>
+                    <tr>
+                      <td><code>init &lt;shell&gt;</code></td>
+                      <td>Write managed shell files.</td>
+                      <td>zsh and bash print a source line.</td>
+                    </tr>
+                    <tr>
+                      <td><code>export --output &lt;path&gt;</code></td>
+                      <td>Export aliases as JSON.</td>
+                      <td>Prints JSON when no output path is provided.</td>
+                    </tr>
+                    <tr>
+                      <td><code>import &lt;path&gt;</code></td>
+                      <td>Import exported JSON.</td>
+                      <td>Upserts by alias name.</td>
+                    </tr>
+                    <tr>
+                      <td><code>register --username &lt;name&gt;</code></td>
+                      <td>Create a sync account.</td>
+                      <td>Prompts for a password and prints a recovery phrase.</td>
+                    </tr>
+                    <tr>
+                      <td><code>login --username &lt;name&gt;</code></td>
+                      <td>Configure sync on another machine.</td>
+                      <td>Prompts for the password and recovery phrase.</td>
+                    </tr>
+                    <tr>
+                      <td><code>sync</code></td>
+                      <td>Pull and push encrypted alias records.</td>
+                      <td>Requires register or login first.</td>
+                    </tr>
+                    <tr>
+                      <td><code>status</code></td>
+                      <td>Report alias and sync state.</td>
+                      <td>Shows pending sync records.</td>
+                    </tr>
+                    <tr>
+                      <td><code>doctor</code></td>
+                      <td>Check local setup.</td>
+                      <td>
+                        Checks database, integration files, sync config, and
+                        secrets.
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </article>
+
+          <aside class="toc" aria-label="On this page">
+            <div class="side-label">On this page</div>
+            <a href="#local">Local aliases</a>
+            <a href="#shell">Shell output</a>
+            <a href="#portable">Portability</a>
+            <a href="#reference">Reference</a>
+          </aside>
+        </div>
+
+        <section class="shell next">
+          <div class="next-grid">
+            <a class="next-card" href="../docs/"
+              ><strong>Docs</strong>
+              <p>Walk through the everyday workflow.</p></a
+            >
+            <a class="next-card" href="../sync/"
+              ><strong>Sync</strong>
+              <p>Register, log in, and push encrypted records.</p></a
+            >
+            <a class="next-card" href="../install/"
+              ><strong>Install</strong>
+              <p>Get the binary onto your machine.</p></a
+            >
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <div class="shell footer-inner">
+          <a class="brand" href="../"
+            ><span class="mark"
+              ><img src="../assets/aliaz-icon-180.png" alt="" /></span
+            ><span>Aliaz</span></a
+          >
+          <div class="footer-links">
+            <a href="../docs/">Docs</a>
+            <a href="../install/">Install</a>
+            <a href="https://github.com/oshabana/aliaz">GitHub</a>
+            <a href="https://buymeacoffee.com/aliaz">Support</a>
+            <a href="../sync/">Sync</a>
+          </div>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>
