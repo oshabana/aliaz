@@ -1,0 +1,9 @@
+name = "aliaz-sync"
+main = "worker/src/index.ts"
+compatibility_date = "2026-05-02"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "aliaz-sync"
+database_id = "138caf60-d010-4566-ac40-7e9551a1cf28"
+migrations_dir = "worker/migrations"
