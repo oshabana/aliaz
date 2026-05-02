@@ -1,8 +1,26 @@
 use anyhow::{Context, Result, anyhow, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use bip39::{Language, Mnemonic};
+use chacha20poly1305::{
+    XChaCha20Poly1305, XNonce,
+    aead::{Aead, KeyInit},
+};
 use clap::{Parser, Subcommand, ValueEnum};
+use hkdf::Hkdf;
+use keyring::Entry;
+use rand::RngCore;
+use reqwest::blocking::Client;
 use rusqlite::{Connection, params};
+use serde::{Deserialize, Serialize};
+use sha2::Sha256;
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
+
+const DEFAULT_SYNC_URL: &str = "https://aliaz-sync.still-silence-6a39.workers.dev";
+const KEYRING_SERVICE: &str = "dev.aliaz.cli";
 
 #[derive(Parser)]
 #[command(name = "aliaz")]
@@ -37,6 +55,34 @@ enum Commands {
     Generate {
         shell: Shell,
     },
+    Export {
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    Import {
+        path: PathBuf,
+    },
+    Register {
+        #[arg(long)]
+        username: String,
+        #[arg(long)]
+        password: Option<String>,
+        #[arg(long, default_value = DEFAULT_SYNC_URL)]
+        sync_url: String,
+    },
+    Login {
+        #[arg(long)]
+        username: String,
+        #[arg(long)]
+        password: Option<String>,
+        #[arg(long)]
+        recovery_phrase: Option<String>,
+        #[arg(long, default_value = DEFAULT_SYNC_URL)]
+        sync_url: String,
+    },
+    Sync,
+    Status,
+    Doctor,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -48,8 +94,104 @@ enum Shell {
 
 #[derive(Debug, PartialEq, Eq)]
 struct Alias {
+    id: String,
     name: String,
     command: String,
+    deleted: bool,
+    dirty: bool,
+    sync_version: i64,
+    updated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ExportFile {
+    version: u8,
+    aliases: Vec<ExportAlias>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ExportAlias {
+    name: String,
+    command: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SyncConfig {
+    sync_url: String,
+    username: String,
+    user_id: String,
+    token: String,
+    latest_version: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct StoredSyncConfig {
+    sync_url: String,
+    username: String,
+    user_id: String,
+    token: String,
+    latest_version: i64,
+    recovery_phrase: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AccountRequest<'a> {
+    username: &'a str,
+    password: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountResponse {
+    user_id: String,
+    token: String,
+    latest_version: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AliasPayload {
+    name: String,
+    command: String,
+    deleted: bool,
+    updated_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct PullResponse {
+    latest_version: i64,
+    records: Vec<RemoteRecord>,
+}
+
+#[derive(Debug, Serialize)]
+struct PushRequest {
+    records: Vec<UploadRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PushResponse {
+    latest_version: i64,
+    records: Vec<PushedRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PushedRecord {
+    id: String,
+    version: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RemoteRecord {
+    id: String,
+    record_type: String,
+    encrypted_blob: String,
+    version: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct UploadRecord {
+    id: String,
+    record_type: String,
+    encrypted_blob: String,
+    updated_at: i64,
 }
 
 fn main() -> Result<()> {
@@ -107,6 +249,117 @@ fn main() -> Result<()> {
                 println!("{line}");
             }
         }
+        Commands::Export { output } => {
+            let aliases = store.list()?;
+            let export = ExportFile {
+                version: 1,
+                aliases: aliases
+                    .iter()
+                    .map(|alias| ExportAlias {
+                        name: alias.name.clone(),
+                        command: alias.command.clone(),
+                    })
+                    .collect(),
+            };
+            let json = serde_json::to_string_pretty(&export)?;
+            let count = export.aliases.len();
+            if let Some(path) = output {
+                fs::write(&path, format!("{json}\n"))
+                    .with_context(|| format!("failed to write {}", path.display()))?;
+                println!("Exported {count} aliases to {}", path.display());
+            } else {
+                println!("{json}");
+            }
+        }
+        Commands::Import { path } => {
+            let contents = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            let export: ExportFile = serde_json::from_str(&contents)
+                .with_context(|| format!("failed to parse {}", path.display()))?;
+            if export.version != 1 {
+                bail!("unsupported export version: {}", export.version);
+            }
+            let count = export.aliases.len();
+            for alias in export.aliases {
+                store.upsert(&alias.name, &alias.command)?;
+            }
+            println!("Imported {count} aliases");
+        }
+        Commands::Register {
+            username,
+            password,
+            sync_url,
+        } => {
+            let password = prompt_secret_if_missing(password, "Password: ")?;
+            let phrase = Mnemonic::generate_in(Language::English, 24)?.to_string();
+            let response = account_request(&sync_url, "register", &username, &password)?;
+            store_recovery_phrase(&response.user_id, &phrase)?;
+            save_config(&SyncConfig {
+                sync_url,
+                username: username.clone(),
+                user_id: response.user_id.clone(),
+                token: response.token,
+                latest_version: response.latest_version,
+            })?;
+            println!("Registered {username}");
+            println!("Recovery phrase: {phrase}");
+            println!(
+                "Store this phrase safely. Aliaz cannot recover encrypted aliases without it."
+            );
+        }
+        Commands::Login {
+            username,
+            password,
+            recovery_phrase,
+            sync_url,
+        } => {
+            let password = prompt_secret_if_missing(password, "Password: ")?;
+            let recovery_phrase = prompt_secret_if_missing(recovery_phrase, "Recovery phrase: ")?;
+            Mnemonic::parse_in_normalized(Language::English, &recovery_phrase)
+                .context("invalid recovery phrase")?;
+            let response = account_request(&sync_url, "login", &username, &password)?;
+            store_recovery_phrase(&response.user_id, &recovery_phrase)?;
+            save_config(&login_config(&sync_url, &username, response))?;
+            println!("Logged in {username}");
+        }
+        Commands::Sync => {
+            let mut config = load_config()?.ok_or_else(|| {
+                anyhow!("sync is not configured; run aliaz register or aliaz login first")
+            })?;
+            let recovery_phrase = load_recovery_phrase(&config.user_id)?;
+            let result = sync_aliases(&store, &mut config, &recovery_phrase)?;
+            save_config(&config)?;
+            println!(
+                "Synced: pulled {}, pushed {}, latest version {}",
+                result.pulled, result.pushed, config.latest_version
+            );
+        }
+        Commands::Status => {
+            let status = store.status()?;
+            println!("aliases: {}", status.aliases);
+            println!("pending sync records: {}", status.pending);
+            if let Some(config) = load_config()? {
+                println!("sync: configured for {}", config.username);
+                println!("sync url: {}", config.sync_url);
+                println!("latest sync version: {}", config.latest_version);
+            } else {
+                println!("sync: not configured");
+            }
+        }
+        Commands::Doctor => {
+            println!("database: ok");
+            report_integration_status()?;
+            if let Some(config) = load_config()? {
+                println!("sync config: ok");
+                if recovery_phrase_available(&config.user_id) {
+                    println!("secret storage: ok");
+                } else {
+                    println!("secret storage: missing");
+                }
+            } else {
+                println!("sync config: missing");
+            }
+        }
     }
 
     Ok(())
@@ -135,6 +388,16 @@ struct Store {
     conn: Connection,
 }
 
+struct StoreStatus {
+    aliases: i64,
+    pending: i64,
+}
+
+struct SyncResult {
+    pulled: usize,
+    pushed: usize,
+}
+
 impl Store {
     fn open(path: PathBuf) -> Result<Self> {
         if let Some(parent) = path.parent() {
@@ -146,28 +409,44 @@ impl Store {
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS aliases (
+                id TEXT NOT NULL UNIQUE,
                 name TEXT PRIMARY KEY,
                 command TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                deleted INTEGER NOT NULL DEFAULT 0,
+                dirty INTEGER NOT NULL DEFAULT 0,
+                sync_version INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS conflict_backups (
+                id TEXT PRIMARY KEY,
+                alias_name TEXT NOT NULL,
+                command TEXT NOT NULL,
+                remote_version INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
             );
             ",
         )?;
+        migrate_alias_table(&conn)?;
 
         Ok(Self { conn })
     }
 
     fn upsert(&self, name: &str, command: &str) -> Result<()> {
         validate_name(name)?;
+        let now = now_unix()?;
         self.conn.execute(
             "
-            INSERT INTO aliases (name, command)
-            VALUES (?1, ?2)
+            INSERT INTO aliases (id, name, command, deleted, dirty, sync_version, created_at, updated_at)
+            VALUES (?1, ?2, ?3, 0, 1, 0, ?4, ?4)
             ON CONFLICT(name) DO UPDATE SET
                 command = excluded.command,
-                updated_at = CURRENT_TIMESTAMP
+                deleted = 0,
+                dirty = 1,
+                updated_at = excluded.updated_at
             ",
-            params![name, command],
+            params![Uuid::new_v4().to_string(), name, command, now],
         )?;
         Ok(())
     }
@@ -175,8 +454,8 @@ impl Store {
     fn update(&self, name: &str, command: &str) -> Result<()> {
         validate_name(name)?;
         let changed = self.conn.execute(
-            "UPDATE aliases SET command = ?2, updated_at = CURRENT_TIMESTAMP WHERE name = ?1",
-            params![name, command],
+            "UPDATE aliases SET command = ?2, deleted = 0, dirty = 1, updated_at = ?3 WHERE name = ?1 AND deleted = 0",
+            params![name, command, now_unix()?],
         )?;
         if changed == 0 {
             bail!("alias not found: {name}");
@@ -186,9 +465,10 @@ impl Store {
 
     fn delete(&self, name: &str) -> Result<()> {
         validate_name(name)?;
-        let changed = self
-            .conn
-            .execute("DELETE FROM aliases WHERE name = ?1", params![name])?;
+        let changed = self.conn.execute(
+            "UPDATE aliases SET deleted = 1, dirty = 1, updated_at = ?2 WHERE name = ?1 AND deleted = 0",
+            params![name, now_unix()?],
+        )?;
         if changed == 0 {
             bail!("alias not found: {name}");
         }
@@ -196,19 +476,171 @@ impl Store {
     }
 
     fn list(&self) -> Result<Vec<Alias>> {
-        let mut statement = self
-            .conn
-            .prepare("SELECT name, command FROM aliases ORDER BY name ASC")?;
+        self.aliases_where("deleted = 0")
+    }
+
+    fn pending(&self) -> Result<Vec<Alias>> {
+        self.aliases_where("dirty = 1")
+    }
+
+    fn find_by_name(&self, name: &str) -> Result<Option<Alias>> {
+        let mut aliases = self.aliases_where_with_param("name = ?1", name)?;
+        Ok(aliases.pop())
+    }
+
+    fn apply_remote(&self, record: &RemoteRecord, payload: &AliasPayload) -> Result<bool> {
+        validate_name(&payload.name)?;
+        if let Some(local) = self.find_by_name(&payload.name)? {
+            if local.dirty && local.updated_at > payload.updated_at {
+                return Ok(false);
+            }
+            if local.dirty && local.updated_at <= payload.updated_at {
+                self.conn.execute(
+                    "INSERT INTO conflict_backups (id, alias_name, command, remote_version, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        Uuid::new_v4().to_string(),
+                        local.name,
+                        local.command,
+                        record.version,
+                        now_unix()?
+                    ],
+                )?;
+            }
+        }
+
+        self.conn.execute(
+            "
+            INSERT INTO aliases (id, name, command, deleted, dirty, sync_version, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?7)
+            ON CONFLICT(name) DO UPDATE SET
+                id = excluded.id,
+                command = excluded.command,
+                deleted = excluded.deleted,
+                dirty = 0,
+                sync_version = excluded.sync_version,
+                updated_at = excluded.updated_at
+            ",
+            params![
+                record.id,
+                payload.name,
+                payload.command,
+                payload.deleted as i64,
+                record.version,
+                now_unix()?,
+                payload.updated_at
+            ],
+        )?;
+        Ok(true)
+    }
+
+    fn mark_synced(&self, id: &str, version: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE aliases SET dirty = 0, sync_version = ?2 WHERE id = ?1",
+            params![id, version],
+        )?;
+        Ok(())
+    }
+
+    fn status(&self) -> Result<StoreStatus> {
+        let aliases = self.conn.query_row(
+            "SELECT COUNT(*) FROM aliases WHERE deleted = 0",
+            [],
+            |row| row.get(0),
+        )?;
+        let pending =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM aliases WHERE dirty = 1", [], |row| {
+                    row.get(0)
+                })?;
+        Ok(StoreStatus { aliases, pending })
+    }
+
+    fn aliases_where(&self, clause: &str) -> Result<Vec<Alias>> {
+        let sql = format!(
+            "SELECT id, name, command, deleted, dirty, sync_version, updated_at FROM aliases WHERE {clause} ORDER BY name ASC"
+        );
+        let mut statement = self.conn.prepare(&sql)?;
         let aliases = statement
-            .query_map([], |row| {
-                Ok(Alias {
-                    name: row.get(0)?,
-                    command: row.get(1)?,
-                })
-            })?
+            .query_map([], alias_from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(aliases)
     }
+
+    fn aliases_where_with_param(&self, clause: &str, value: &str) -> Result<Vec<Alias>> {
+        let sql = format!(
+            "SELECT id, name, command, deleted, dirty, sync_version, updated_at FROM aliases WHERE {clause} ORDER BY name ASC"
+        );
+        let mut statement = self.conn.prepare(&sql)?;
+        let aliases = statement
+            .query_map([value], alias_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(aliases)
+    }
+}
+
+fn alias_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Alias> {
+    Ok(Alias {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        command: row.get(2)?,
+        deleted: row.get::<_, i64>(3)? == 1,
+        dirty: row.get::<_, i64>(4)? == 1,
+        sync_version: row.get(5)?,
+        updated_at: row.get(6)?,
+    })
+}
+
+fn migrate_alias_table(conn: &Connection) -> Result<()> {
+    let columns = table_columns(conn)?;
+    if !columns.contains("id") {
+        conn.execute("ALTER TABLE aliases ADD COLUMN id TEXT", [])?;
+    }
+    if !columns.contains("deleted") {
+        conn.execute(
+            "ALTER TABLE aliases ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !columns.contains("dirty") {
+        conn.execute(
+            "ALTER TABLE aliases ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !columns.contains("sync_version") {
+        conn.execute(
+            "ALTER TABLE aliases ADD COLUMN sync_version INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+
+    let names = {
+        let mut statement = conn.prepare("SELECT name FROM aliases WHERE id IS NULL OR id = ''")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for name in names {
+        conn.execute(
+            "UPDATE aliases SET id = ?2 WHERE name = ?1",
+            params![name, Uuid::new_v4().to_string()],
+        )?;
+    }
+    conn.execute(
+        "UPDATE aliases SET updated_at = ?1 WHERE updated_at IS NULL OR typeof(updated_at) = 'text'",
+        params![now_unix()?],
+    )?;
+
+    Ok(())
+}
+
+fn table_columns(conn: &Connection) -> Result<HashSet<String>> {
+    let mut statement = conn.prepare("PRAGMA table_info(aliases)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
+    Ok(columns)
 }
 
 fn parse_aliases(contents: &str) -> Result<Vec<Alias>> {
@@ -226,8 +658,13 @@ fn parse_aliases(contents: &str) -> Result<Vec<Alias>> {
             if let Some((name, command)) = entry.split_once('=') {
                 validate_name(name)?;
                 aliases.push(Alias {
+                    id: Uuid::new_v4().to_string(),
                     name: name.to_owned(),
                     command: command.to_owned(),
+                    deleted: false,
+                    dirty: true,
+                    sync_version: 0,
+                    updated_at: now_unix()?,
                 });
             }
         }
@@ -270,6 +707,101 @@ fn config_home() -> Result<PathBuf> {
     dirs::config_dir().ok_or_else(|| anyhow!("could not locate config directory"))
 }
 
+fn config_path() -> Result<PathBuf> {
+    Ok(config_home()?.join("aliaz").join("config.json"))
+}
+
+fn prompt_secret_if_missing(value: Option<String>, prompt: &str) -> Result<String> {
+    match value {
+        Some(value) => Ok(value),
+        None => rpassword::prompt_password(prompt).context("failed to read secret from terminal"),
+    }
+}
+
+fn load_config() -> Result<Option<SyncConfig>> {
+    let path = config_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let contents =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    let stored: StoredSyncConfig = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    let config = SyncConfig {
+        sync_url: stored.sync_url,
+        username: stored.username,
+        user_id: stored.user_id,
+        token: stored.token,
+        latest_version: stored.latest_version,
+    };
+    if let Some(recovery_phrase) = stored.recovery_phrase {
+        store_recovery_phrase(&config.user_id, &recovery_phrase)?;
+        save_config(&config)?;
+    }
+    Ok(Some(config))
+}
+
+fn save_config(config: &SyncConfig) -> Result<()> {
+    let path = config_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(
+        &path,
+        format!("{}\n", serde_json::to_string_pretty(config)?),
+    )
+    .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(())
+}
+
+fn store_recovery_phrase(user_id: &str, recovery_phrase: &str) -> Result<()> {
+    if let Some(secret_home) = test_secret_home() {
+        fs::create_dir_all(&secret_home)
+            .with_context(|| format!("failed to create {}", secret_home.display()))?;
+        fs::write(secret_home.join(secret_file_name(user_id)), recovery_phrase)
+            .context("failed to store test recovery phrase")?;
+        return Ok(());
+    }
+
+    Entry::new(KEYRING_SERVICE, user_id)?
+        .set_password(recovery_phrase)
+        .context("failed to store recovery phrase in OS credential store")?;
+    Ok(())
+}
+
+fn load_recovery_phrase(user_id: &str) -> Result<String> {
+    if let Some(secret_home) = test_secret_home() {
+        return fs::read_to_string(secret_home.join(secret_file_name(user_id)))
+            .context("recovery phrase is missing from test secret store");
+    }
+
+    Entry::new(KEYRING_SERVICE, user_id)?
+        .get_password()
+        .context("recovery phrase is missing from OS credential store")
+}
+
+fn recovery_phrase_available(user_id: &str) -> bool {
+    load_recovery_phrase(user_id).is_ok()
+}
+
+fn test_secret_home() -> Option<PathBuf> {
+    std::env::var_os("ALIAZ_TEST_SECRET_HOME").map(PathBuf::from)
+}
+
+fn secret_file_name(user_id: &str) -> String {
+    user_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 fn write_shell_integration(shell: &Shell, aliases: &[Alias]) -> Result<PathBuf> {
     let path = match shell {
         Shell::Zsh | Shell::Bash => config_home()?.join("aliaz").join("aliases.sh"),
@@ -304,4 +836,215 @@ fn shell_alias_lines(shell: &Shell, aliases: &[Alias]) -> Vec<String> {
             }
         })
         .collect()
+}
+
+fn account_request(
+    sync_url: &str,
+    path: &str,
+    username: &str,
+    password: &str,
+) -> Result<AccountResponse> {
+    let url = format!("{}/v1/{path}", sync_url.trim_end_matches('/'));
+    let response = Client::new()
+        .post(url)
+        .json(&AccountRequest { username, password })
+        .send()?;
+    if !response.status().is_success() {
+        bail!("server returned {}", response.status());
+    }
+    Ok(response.json()?)
+}
+
+fn login_config(sync_url: &str, username: &str, response: AccountResponse) -> SyncConfig {
+    SyncConfig {
+        sync_url: sync_url.to_owned(),
+        username: username.to_owned(),
+        user_id: response.user_id,
+        token: response.token,
+        latest_version: 0,
+    }
+}
+
+fn sync_aliases(
+    store: &Store,
+    config: &mut SyncConfig,
+    recovery_phrase: &str,
+) -> Result<SyncResult> {
+    let client = Client::new();
+    let key = derive_key(recovery_phrase)?;
+    let pull_url = format!(
+        "{}/v1/records?after={}",
+        config.sync_url.trim_end_matches('/'),
+        config.latest_version
+    );
+    let pull: PullResponse = client
+        .get(pull_url)
+        .bearer_auth(&config.token)
+        .send()?
+        .error_for_status()?
+        .json()?;
+
+    let mut pulled = 0;
+    for record in &pull.records {
+        if record.record_type != "alias" {
+            continue;
+        }
+        let payload = decrypt_alias(&key, &record.encrypted_blob)?;
+        if store.apply_remote(record, &payload)? {
+            pulled += 1;
+        }
+    }
+    config.latest_version = pull.latest_version;
+
+    let pending = store.pending()?;
+    let mut uploads = Vec::with_capacity(pending.len());
+    for alias in &pending {
+        let payload = AliasPayload {
+            name: alias.name.clone(),
+            command: alias.command.clone(),
+            deleted: alias.deleted,
+            updated_at: alias.updated_at,
+        };
+        uploads.push(UploadRecord {
+            id: alias.id.clone(),
+            record_type: "alias".to_owned(),
+            encrypted_blob: encrypt_alias(&key, &payload)?,
+            updated_at: alias.updated_at,
+        });
+    }
+
+    let pushed = uploads.len();
+    if pushed > 0 {
+        let push_url = format!("{}/v1/records", config.sync_url.trim_end_matches('/'));
+        let push: PushResponse = client
+            .post(push_url)
+            .bearer_auth(&config.token)
+            .json(&PushRequest { records: uploads })
+            .send()?
+            .error_for_status()?
+            .json()?;
+        for record in push.records {
+            store.mark_synced(&record.id, record.version)?;
+        }
+        config.latest_version = push.latest_version;
+    }
+
+    Ok(SyncResult { pulled, pushed })
+}
+
+fn derive_key(recovery_phrase: &str) -> Result<[u8; 32]> {
+    let hk = Hkdf::<Sha256>::new(
+        Some(b"aliaz recovery phrase v1"),
+        recovery_phrase.as_bytes(),
+    );
+    let mut key = [0u8; 32];
+    hk.expand(b"alias record encryption", &mut key)
+        .map_err(|_| anyhow!("failed to derive encryption key"))?;
+    Ok(key)
+}
+
+fn encrypt_alias(key: &[u8; 32], payload: &AliasPayload) -> Result<String> {
+    let cipher = XChaCha20Poly1305::new(key.into());
+    let mut nonce_bytes = [0u8; 24];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let nonce = XNonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(nonce, serde_json::to_vec(payload)?.as_ref())
+        .map_err(|_| anyhow!("failed to encrypt alias"))?;
+    let mut blob = nonce_bytes.to_vec();
+    blob.extend(ciphertext);
+    Ok(BASE64.encode(blob))
+}
+
+fn decrypt_alias(key: &[u8; 32], encrypted_blob: &str) -> Result<AliasPayload> {
+    let blob = BASE64.decode(encrypted_blob)?;
+    if blob.len() < 25 {
+        bail!("encrypted alias blob is too short");
+    }
+    let (nonce_bytes, ciphertext) = blob.split_at(24);
+    let cipher = XChaCha20Poly1305::new(key.into());
+    let plaintext = cipher
+        .decrypt(XNonce::from_slice(nonce_bytes), ciphertext)
+        .map_err(|_| anyhow!("failed to decrypt alias"))?;
+    Ok(serde_json::from_slice(&plaintext)?)
+}
+
+fn report_integration_status() -> Result<()> {
+    let sh_path = config_home()?.join("aliaz").join("aliases.sh");
+    let fish_path = config_home()?
+        .join("fish")
+        .join("conf.d")
+        .join("aliaz.fish");
+    if sh_path.exists() {
+        println!("zsh/bash integration: ok");
+    } else {
+        println!("zsh/bash integration: missing");
+    }
+    if fish_path.exists() {
+        println!("fish integration: ok");
+    } else {
+        println!("fish integration: missing");
+    }
+    Ok(())
+}
+
+fn now_unix() -> Result<i64> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before unix epoch")?
+        .as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encryption_round_trips_alias_payload() {
+        let key = derive_key("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
+        let payload = AliasPayload {
+            name: "gs".to_owned(),
+            command: "git status".to_owned(),
+            deleted: false,
+            updated_at: 123,
+        };
+
+        let encrypted = encrypt_alias(&key, &payload).unwrap();
+        assert_ne!(encrypted, serde_json::to_string(&payload).unwrap());
+        let decrypted = decrypt_alias(&key, &encrypted).unwrap();
+
+        assert_eq!(decrypted.name, "gs");
+        assert_eq!(decrypted.command, "git status");
+        assert!(!decrypted.deleted);
+        assert_eq!(decrypted.updated_at, 123);
+    }
+
+    #[test]
+    fn login_config_starts_from_zero_to_force_initial_pull() {
+        let response = AccountResponse {
+            user_id: "user-1".to_owned(),
+            token: "token-1".to_owned(),
+            latest_version: 42,
+        };
+
+        let config = login_config("https://sync.example", "ada", response);
+
+        assert_eq!(config.latest_version, 0);
+    }
+
+    #[test]
+    fn sync_config_json_does_not_contain_recovery_phrase() {
+        let config = SyncConfig {
+            sync_url: "https://sync.example".to_owned(),
+            username: "ada".to_owned(),
+            user_id: "user-1".to_owned(),
+            token: "token-1".to_owned(),
+            latest_version: 7,
+        };
+
+        let json = serde_json::to_string(&config).unwrap();
+
+        assert!(!json.contains("recovery_phrase"));
+        assert!(!json.contains("abandon"));
+    }
 }

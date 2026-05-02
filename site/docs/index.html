@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aliaz Docs</title>
+    <meta
+      name="description"
+      content="Quickstart and shell integration docs for Aliaz."
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="../assets/favicon-32.png"
+    />
+    <link
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="../assets/aliaz-icon-180.png"
+    />
+    <link rel="stylesheet" href="../pages.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div class="shell nav">
+          <a class="brand" href="../" aria-label="Aliaz home">
+            <span class="mark"
+              ><img src="../assets/aliaz-icon-180.png" alt=""
+            /></span>
+            <span>Aliaz</span>
+          </a>
+          <nav class="navlinks" aria-label="Main navigation">
+            <a class="active" href="./">Docs</a>
+            <a href="../install/">Install</a>
+            <a href="../commands/">Commands</a>
+            <a href="../sync/">Sync</a>
+          </nav>
+          <div class="nav-actions">
+            <a class="btn" href="https://github.com/oshabana/aliaz">GitHub</a>
+            <a class="btn" href="https://buymeacoffee.com/aliaz">Support</a>
+            <a class="btn primary" href="../install/">Install</a>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section class="shell hero">
+          <div>
+            <div class="eyebrow"><span class="dot"></span> Docs</div>
+            <h1>Start local. Add sync later.</h1>
+            <p class="lead">
+              Aliaz is an MIT-licensed open-source CLI that works as a local
+              alias manager before any account exists. Add aliases, generate
+              shell output, and only register when you want encrypted sync.
+            </p>
+            <div class="actions">
+              <a class="btn primary" href="#quickstart">Quickstart</a>
+              <a class="btn" href="../commands/">All commands</a>
+            </div>
+          </div>
+          <aside class="hero-card">
+            <ul class="rule-list">
+              <li><code>local</code><span>Aliases live in SQLite.</span></li>
+              <li>
+                <code>shells</code
+                ><span>zsh, bash, and fish are supported.</span>
+              </li>
+              <li><code>sync</code><span>Accounts are optional.</span></li>
+            </ul>
+          </aside>
+        </section>
+
+        <div class="shell layout">
+          <aside class="side-nav" aria-label="Docs sections">
+            <div class="side-label">Docs</div>
+            <a class="active" href="#quickstart">Quickstart</a>
+            <a href="#shell">Shell integration</a>
+            <a href="#migrate">Migrate aliases</a>
+            <a href="#privacy">Sync privacy</a>
+            <a href="#storage">Storage</a>
+            <a href="#troubleshooting">Troubleshooting</a>
+          </aside>
+
+          <article class="content">
+            <section id="quickstart">
+              <div class="kicker">Quickstart</div>
+              <h2>Add an alias and initialize your shell.</h2>
+              <p>
+                Add aliases to the local store, list them, then write the shell
+                integration for the shell you use.
+              </p>
+              <div class="terminal">
+                <div class="terminal-head">
+                  <div class="lights" aria-hidden="true">
+                    <i></i><i></i><i></i>
+                  </div>
+                  <span>quickstart</span>
+                </div>
+                <pre><code><span class="prompt">$</span> aliaz add gs "git status"
+<span class="ok">Added gs</span>
+
+<span class="prompt">$</span> aliaz list
+<span class="dim">gs	git status</span>
+
+<span class="prompt">$</span> aliaz init zsh
+<span class="dim">Wrote ~/.config/aliaz/aliases.sh</span></code></pre>
+              </div>
+            </section>
+
+            <section id="shell">
+              <div class="kicker">Shell integration</div>
+              <h2>Generate stdout or write managed files.</h2>
+              <div class="grid-2">
+                <div class="panel">
+                  <h3><code>generate</code></h3>
+                  <p>
+                    Prints alias definitions to stdout. It does not write files.
+                  </p>
+                  <pre><code><span class="prompt">$</span> aliaz generate zsh
+<span class="prompt">$</span> aliaz generate bash
+<span class="prompt">$</span> aliaz generate fish</code></pre>
+                </div>
+                <div class="panel">
+                  <h3><code>init</code></h3>
+                  <p>
+                    Writes managed integration files. zsh and bash print a
+                    <code>source</code> line to add to your startup file; fish
+                    writes its managed configuration file directly.
+                  </p>
+                  <pre><code><span class="prompt">$</span> aliaz init zsh
+<span class="prompt">$</span> aliaz init bash
+<span class="prompt">$</span> aliaz init fish</code></pre>
+                </div>
+              </div>
+            </section>
+
+            <section id="migrate">
+              <div class="kicker">Migration</div>
+              <h2>Import existing zsh-style aliases.</h2>
+              <p>
+                Migration reads lines that start with <code>alias </code>.
+                Commented aliases and shell functions are ignored.
+              </p>
+              <div class="terminal">
+                <div class="terminal-head">
+                  <div class="lights" aria-hidden="true">
+                    <i></i><i></i><i></i>
+                  </div>
+                  <span>migrate</span>
+                </div>
+                <pre><code><span class="prompt">$</span> aliaz migrate --from ~/.zshrc
+<span class="prompt">$</span> aliaz migrate</code></pre>
+              </div>
+            </section>
+
+            <section id="privacy">
+              <div class="kicker">Sync privacy</div>
+              <h2>Encrypted sync keeps alias contents client-side.</h2>
+              <p>
+                Alias names and commands are encrypted before upload. The sync
+                server stores encrypted records and metadata, while the recovery
+                phrase stays local and is required to decrypt aliases on a new
+                computer.
+              </p>
+              <div class="grid-2">
+                <div class="panel">
+                  <h3>New computer</h3>
+                  <pre><code><span class="prompt">$</span> aliaz login --username ada
+<span class="prompt">$</span> aliaz sync
+<span class="prompt">$</span> aliaz init zsh</code></pre>
+                </div>
+                <div class="panel">
+                  <h3>Threat model</h3>
+                  <p>
+                    A database-only compromise should expose encrypted blobs,
+                    not readable aliases. Read the sync page for the full model.
+                  </p>
+                </div>
+              </div>
+              <div class="actions">
+                <a class="btn" href="../sync/">Read sync security</a>
+              </div>
+            </section>
+
+            <section id="storage">
+              <div class="kicker">Storage</div>
+              <h2>Local data stays in standard OS directories.</h2>
+              <p>
+                Aliases are stored in a local SQLite database under the
+                operating system's standard data directory. Sync config is
+                stored under the standard config directory. Recovery phrases are
+                stored in the OS credential store.
+              </p>
+              <div class="callout">
+                For tests and isolated runs, set <code>ALIAZ_DATA_HOME</code> or
+                <code>ALIAZ_CONFIG_HOME</code>.
+              </div>
+            </section>
+
+            <section id="troubleshooting">
+              <div class="kicker">Troubleshooting</div>
+              <h2>Check local state before changing config.</h2>
+              <p>
+                If an alias does not appear in your shell, list aliases, rerun
+                init for your shell, then use doctor.
+              </p>
+              <div class="terminal">
+                <div class="terminal-head">
+                  <div class="lights" aria-hidden="true">
+                    <i></i><i></i><i></i>
+                  </div>
+                  <span>doctor</span>
+                </div>
+                <pre><code><span class="prompt">$</span> aliaz list
+<span class="prompt">$</span> aliaz init zsh
+<span class="prompt">$</span> aliaz doctor</code></pre>
+              </div>
+            </section>
+          </article>
+
+          <aside class="toc" aria-label="On this page">
+            <div class="side-label">On this page</div>
+            <a href="#quickstart">Quickstart</a>
+            <a href="#shell">Shell integration</a>
+            <a href="#migrate">Migration</a>
+            <a href="#privacy">Sync privacy</a>
+            <a href="#storage">Storage</a>
+            <a href="#troubleshooting">Troubleshooting</a>
+          </aside>
+        </div>
+
+        <section class="shell next">
+          <div class="next-grid">
+            <a class="next-card" href="../install/"
+              ><strong>Install</strong>
+              <p>Get the CLI onto your machine.</p></a
+            >
+            <a class="next-card" href="../commands/"
+              ><strong>Commands</strong>
+              <p>Read the full command reference.</p></a
+            >
+            <a class="next-card" href="../sync/"
+              ><strong>Sync</strong>
+              <p>Set up optional encrypted sync.</p></a
+            >
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <div class="shell footer-inner">
+          <a class="brand" href="../"
+            ><span class="mark"
+              ><img src="../assets/aliaz-icon-180.png" alt="" /></span
+            ><span>Aliaz</span></a
+          >
+          <div class="footer-links">
+            <a href="../install/">Install</a>
+            <a href="https://github.com/oshabana/aliaz">GitHub</a>
+            <a href="https://buymeacoffee.com/aliaz">Support</a>
+            <a href="../commands/">Commands</a>
+            <a href="../sync/">Sync</a>
+          </div>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

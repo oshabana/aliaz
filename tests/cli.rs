@@ -7,6 +7,7 @@ fn cmd(home: &TempDir) -> Command {
     let mut command = Command::cargo_bin("aliaz").expect("binary exists");
     command.env("ALIAS_TOOL_HOME", home.path());
     command.env("ALIAZ_CONFIG_HOME", home.path().join(".config"));
+    command.env("ALIAZ_TEST_SECRET_HOME", home.path().join(".secrets"));
     command
 }
 
@@ -158,4 +159,70 @@ function nope() { true; }
         .stdout(predicate::str::contains("gs\tgit status"))
         .stdout(predicate::str::contains("ll\tls -lah"))
         .stdout(predicate::str::contains("ignored").not());
+}
+
+#[test]
+fn export_and_import_round_trip_aliases() {
+    let source = TempDir::new().expect("source home");
+    let target = TempDir::new().expect("target home");
+    let export_path = source.path().join("aliases.json");
+
+    cmd(&source)
+        .args(["add", "gs", "git status"])
+        .assert()
+        .success();
+    cmd(&source)
+        .args(["add", "ll", "ls -lah"])
+        .assert()
+        .success();
+
+    cmd(&source)
+        .args([
+            "export",
+            "--output",
+            export_path.to_str().expect("utf8 path"),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Exported 2 aliases"));
+
+    cmd(&target)
+        .args(["import", export_path.to_str().expect("utf8 path")])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Imported 2 aliases"));
+
+    cmd(&target)
+        .args(["list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("gs\tgit status"))
+        .stdout(predicate::str::contains("ll\tls -lah"));
+}
+
+#[test]
+fn status_and_doctor_report_local_state() {
+    let home = TempDir::new().expect("temp home");
+
+    cmd(&home)
+        .args(["add", "gs", "git status"])
+        .assert()
+        .success();
+    cmd(&home).args(["init", "zsh"]).assert().success();
+
+    cmd(&home)
+        .args(["status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("aliases: 1"))
+        .stdout(predicate::str::contains("pending sync records: 1"))
+        .stdout(predicate::str::contains("sync: not configured"));
+
+    cmd(&home)
+        .args(["doctor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("database: ok"))
+        .stdout(predicate::str::contains("zsh/bash integration: ok"))
+        .stdout(predicate::str::contains("sync config: missing"));
 }

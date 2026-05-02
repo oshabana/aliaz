@@ -10,5 +10,8 @@
   },
   "devDependencies": {
     "wrangler": "^4.87.0"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.2.0"
   }
 }
