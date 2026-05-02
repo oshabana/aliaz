@@ -1,8 +1,54 @@
-# Aliaz
+<div align="center">
+  <a href="https://aliaz.dev">
+    <img src="site/assets/aliaz-icon-180.png" alt="Aliaz" width="88" height="88">
+  </a>
+  <h1>Aliaz</h1>
+  <p>
+    <strong>Open-source alias management for the CLI.</strong>
+  </p>
+  <p>
+    Local-first shell aliases, generated safely for zsh, bash, and fish, with
+    optional encrypted sync between machines.
+  </p>
+  <p>
+    <a href="https://aliaz.dev"><strong>Official website</strong></a>
+    ·
+    <a href="https://aliaz.dev/install/">Install</a>
+    ·
+    <a href="https://aliaz.dev/docs/">Docs</a>
+    ·
+    <a href="https://aliaz.dev/sync/">Sync</a>
+  </p>
+  <p>
+    <a href="https://github.com/oshabana/aliaz/actions/workflows/release.yml"><img alt="Release" src="https://img.shields.io/github/actions/workflow/status/oshabana/aliaz/release.yml?label=release"></a>
+    <a href="https://github.com/oshabana/aliaz/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/oshabana/aliaz"></a>
+    <a href="https://aliaz.dev"><img alt="Website" src="https://img.shields.io/badge/website-aliaz.dev-2563eb"></a>
+  </p>
+</div>
 
-Aliaz is a CLI for managing shell aliases from a local SQLite-backed source of
-truth. Add aliases once, generate shell-safe alias files for zsh, bash, or fish,
-and optionally sync encrypted aliases across machines.
+---
+
+```sh
+$ aliaz add gs "git status"
+Added gs
+
+$ aliaz init zsh
+Wrote ~/.config/aliaz/aliases.sh
+Configured ~/.zshrc
+
+$ aliaz sync
+Synced encrypted aliases
+```
+
+## What Aliaz Does
+
+| Need | How Aliaz handles it |
+| --- | --- |
+| One alias source | Stores aliases in a local SQLite-backed source of truth. |
+| Shell-safe output | Generates alias files for zsh, bash, and fish. |
+| Existing aliases | Imports zsh-style alias files into the local database. |
+| Recovery across machines | Optionally syncs encrypted alias records after account setup. |
+| Inspectable state | Reports local setup, sync state, and shell integration health. |
 
 ## Installation
 
