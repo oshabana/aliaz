@@ -49,12 +49,12 @@
         <section class="shell hero">
           <div>
             <div class="eyebrow"><span class="dot"></span> Installation</div>
-            <h1>Install the CLI first.</h1>
+            <h1>Install and connect your shell.</h1>
             <p class="lead">
               The fastest path is the release installer. It downloads the
               matching binary for your platform and installs it to
-              <code>~/.local/bin</code> by default. Aliaz is open source on
-              GitHub and MIT licensed.
+              <code>~/.local/bin</code> by default. Interactive installs can
+              also wire Aliaz into zsh, bash, fish, or multiple shells.
             </p>
             <div class="actions">
               <a class="btn primary" href="#installer">Copy installer</a>
@@ -69,13 +69,10 @@
               </li>
               <li>
                 <code>02</code
-                ><span
-                  >Release archives will support macOS and Linux.</span
-                >
+                ><span>Shell setup can be interactive or scripted.</span>
               </li>
               <li>
-                <code>03</code
-                ><span>Run <code>aliaz --help</code> after install.</span>
+                <code>03</code><span>Sync setup can start during install.</span>
               </li>
             </ul>
           </aside>
@@ -97,7 +94,8 @@
               <p>
                 This is the primary install path from the README. The script
                 chooses the release asset for the current platform and installs
-                the binary.
+                the binary. When a terminal is available, it can ask which
+                shells to configure.
               </p>
               <div class="terminal">
                 <div class="terminal-head">
@@ -113,12 +111,31 @@
 
             <section id="options">
               <div class="kicker">Options</div>
-              <h2>Pin the version or destination.</h2>
+              <h2>Script shell setup, sync setup, version, or destination.</h2>
               <div class="grid-2">
+                <div class="panel">
+                  <h3>Configure shells</h3>
+                  <p>
+                    Set <code>ALIAZ_INSTALL_SHELLS</code> to one or more shell
+                    names, <code>all</code>, or <code>skip</code>.
+                  </p>
+                  <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SHELLS="zsh bash" sh
+<span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SHELLS=skip sh</code></pre>
+                </div>
+                <div class="panel">
+                  <h3>Start sync setup</h3>
+                  <p>
+                    Use <code>ALIAZ_INSTALL_SYNC</code> with
+                    <code>login</code> or <code>register</code>.
+                    Non-interactive runs also need
+                    <code>ALIAZ_SYNC_USERNAME</code>.
+                  </p>
+                  <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SYNC=login ALIAZ_SYNC_USERNAME=ada sh</code></pre>
+                </div>
                 <div class="panel">
                   <h3>Install a version</h3>
                   <p>Set <code>ALIAZ_VERSION</code> before the shell script.</p>
-                  <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.0 sh</code></pre>
+                  <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.1 sh</code></pre>
                 </div>
                 <div class="panel">
                   <h3>Change install dir</h3>
@@ -154,8 +171,10 @@
               <div class="kicker">Verify</div>
               <h2>Confirm the binary is available.</h2>
               <p>
-                If the command is not found, add the install directory to your
-                <code>PATH</code> and open a new shell.
+                If <code>aliaz</code> is not found, add the install directory to
+                your <code>PATH</code> and open a new shell. If you skipped
+                shell setup, run <code>aliaz init zsh</code>,
+                <code>aliaz init bash</code>, or <code>aliaz init fish</code>.
               </p>
               <div class="terminal">
                 <div class="terminal-head">

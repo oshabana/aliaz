@@ -1108,9 +1108,9 @@
             </div>
             <h1 id="hero-title">Shell aliases from one local store.</h1>
             <p class="lead">
-              Aliaz stores aliases in SQLite, prints shell-safe definitions, and
-              writes managed integration files. Sync is optional, encrypted, and
-              only starts after registration or login.
+              Aliaz stores aliases in SQLite, writes shell integration for zsh,
+              bash, and fish, and syncs encrypted records between machines only
+              when you opt in.
             </p>
             <div class="hero-actions">
               <a class="btn primary" href="./install/">Install now</a>
@@ -1148,8 +1148,7 @@
                   <span class="cmd">aliaz init zsh</span>
                 </div>
                 <div class="dim">Wrote ~/.config/aliaz/aliases.sh</div>
-                <div class="dim">Add this line to your zsh startup file:</div>
-                <div class="dim">source "$HOME/.config/aliaz/aliases.sh"</div>
+                <div class="dim">Configured ~/.zshrc</div>
                 <br />
                 <div class="comment"># optional sync</div>
                 <div>
@@ -1190,8 +1189,9 @@
               </div>
               <p class="section-copy">
                 The release installer downloads the matching macOS or Linux
-                binary, verifies checksums when possible, and installs Aliaz to
-                <code>~/.local/bin</code> by default.
+                binary, verifies checksums when possible, installs Aliaz to
+                <code>~/.local/bin</code>, and can configure shell integration
+                during install.
               </p>
             </div>
 
@@ -1204,14 +1204,14 @@
                 <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | sh
 <span class="prompt">$</span> aliaz add gs "git status"
 <span class="prompt">$</span> aliaz list
-<span class="prompt">$</span> aliaz init zsh
 <span class="prompt">$</span> aliaz register --username ada
 <span class="prompt">$</span> aliaz sync</code></pre>
               </div>
               <div class="install-note">
                 <span
-                  >Source builds are still supported for development and local
-                  testing.</span
+                  >Set <code>ALIAZ_INSTALL_SHELLS</code>,
+                  <code>ALIAZ_INSTALL_SYNC</code>, <code>ALIAZ_VERSION</code>,
+                  or <code>ALIAZ_INSTALL_DIR</code> to customize installs.</span
                 >
                 <code>cargo install --path .</code>
               </div>
@@ -1256,7 +1256,8 @@
                 <p>
                   Generate stdout output with <code>aliaz generate</code>, or
                   write managed zsh, bash, and fish files with
-                  <code>aliaz init</code>.
+                  <code>aliaz init</code>. zsh and bash startup files are
+                  configured once.
                 </p>
               </article>
               <figure class="flow" aria-label="Alias sync flow">
@@ -1389,15 +1390,14 @@
 
 <span class="prompt">$</span> aliaz init zsh
 <span class="dim">Wrote ~/.config/aliaz/aliases.sh</span>
-<span class="dim">Add this line to your zsh startup file:</span>
-<span class="dim">source "$HOME/.config/aliaz/aliases.sh"</span></code></pre>
+<span class="dim">Configured ~/.zshrc</span></code></pre>
               </div>
               <aside class="notes-panel" aria-label="CLI notes">
                 <div class="note">
                   <strong>Account only for sync</strong>
                   <p>
                     Add, list, edit, delete, generate, init, migrate, import,
-                    export, status, and doctor work locally.
+                    export, status, logout, and doctor work locally.
                   </p>
                 </div>
                 <div class="note">
@@ -1411,7 +1411,8 @@
                   <strong>Shell files are generated</strong>
                   <p>
                     Use <code>generate</code> for stdout or <code>init</code>
-                    for managed zsh, bash, and fish integration files.
+                    for managed files that refresh after alias mutations.
+                    Supported shells are zsh, bash, and fish.
                   </p>
                 </div>
                 <div class="note">
@@ -1436,7 +1437,7 @@
               <p class="section-copy">
                 The docs preview follows the current command set: install,
                 quickstart, shell integration, migration, import/export, sync,
-                status, and doctor.
+                logout, status, and doctor.
               </p>
             </div>
 

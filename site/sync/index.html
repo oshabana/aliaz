@@ -84,6 +84,7 @@
             <div class="side-label">Sync</div>
             <a class="active" href="#setup">Setup</a>
             <a href="#new-machine">New computer</a>
+            <a href="#logout">Logout</a>
             <a href="#security">Security model</a>
             <a href="#server-sees">Server visibility</a>
             <a href="#self-hosting">Custom server</a>
@@ -140,6 +141,27 @@
 
 <span class="prompt">$</span> aliaz sync
 <span class="prompt">$</span> aliaz init zsh</code></pre>
+              </div>
+            </section>
+
+            <section id="logout">
+              <div class="kicker">Logout</div>
+              <h2>Remove sync state from the current machine.</h2>
+              <p>
+                <code>aliaz logout</code> removes the local sync configuration
+                and recovery phrase for this device. It does not delete aliases
+                from the local database or remove the sync account on the
+                server.
+              </p>
+              <div class="terminal">
+                <div class="terminal-head">
+                  <div class="lights" aria-hidden="true">
+                    <i></i><i></i><i></i>
+                  </div>
+                  <span>local logout</span>
+                </div>
+                <pre><code><span class="prompt">$</span> aliaz logout
+<span class="ok">Logged out ada</span></code></pre>
               </div>
             </section>
 
@@ -219,6 +241,7 @@
             <div class="side-label">On this page</div>
             <a href="#setup">Setup</a>
             <a href="#new-machine">New computer</a>
+            <a href="#logout">Logout</a>
             <a href="#security">Security model</a>
             <a href="#server-sees">Server visibility</a>
             <a href="#self-hosting">Custom server</a>

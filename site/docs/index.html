@@ -89,7 +89,8 @@
               <h2>Add an alias and initialize your shell.</h2>
               <p>
                 Add aliases to the local store, list them, then write the shell
-                integration for the shell you use.
+                integration for the shell you use. After shell integration is
+                active, alias changes refresh in the current shell.
               </p>
               <div class="terminal">
                 <div class="terminal-head">
@@ -105,7 +106,8 @@
 <span class="dim">gs	git status</span>
 
 <span class="prompt">$</span> aliaz init zsh
-<span class="dim">Wrote ~/.config/aliaz/aliases.sh</span></code></pre>
+<span class="dim">Wrote ~/.config/aliaz/aliases.sh</span>
+<span class="dim">Configured ~/.zshrc</span></code></pre>
               </div>
             </section>
 
@@ -125,9 +127,9 @@
                 <div class="panel">
                   <h3><code>init</code></h3>
                   <p>
-                    Writes managed integration files. zsh and bash print a
-                    <code>source</code> line to add to your startup file; fish
-                    writes its managed configuration file directly.
+                    Writes managed integration files. zsh and bash add the
+                    startup <code>source</code> line once; fish writes its
+                    managed configuration file directly.
                   </p>
                   <pre><code><span class="prompt">$</span> aliaz init zsh
 <span class="prompt">$</span> aliaz init bash
@@ -204,7 +206,10 @@
               <h2>Check local state before changing config.</h2>
               <p>
                 If an alias does not appear in your shell, list aliases, rerun
-                init for your shell, then use doctor.
+                init for your shell, then use doctor. Once integration is
+                loaded, <code>add</code>, <code>edit</code>, <code>rm</code>,
+                <code>migrate</code>, <code>import</code>, and
+                <code>sync</code> refresh aliases automatically.
               </p>
               <div class="terminal">
                 <div class="terminal-head">

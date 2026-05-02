@@ -13,12 +13,26 @@ curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | sh
 ```
 
 The installer downloads the matching release binary for your platform and
-installs it to `~/.local/bin`.
+installs it to `~/.local/bin`. During interactive installs, it can configure
+zsh, bash, fish, or multiple shells. For zsh and bash, it updates the startup
+file once; for fish, it writes the managed `conf.d` file.
+
+Configure shells non-interactively:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SHELLS="zsh bash" sh
+```
+
+Skip shell setup:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SHELLS=skip sh
+```
 
 Install a specific version:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.1 sh
 ```
 
 Install to a different directory:
@@ -31,6 +45,12 @@ Confirm the binary is available:
 
 ```sh
 aliaz --help
+```
+
+The installer can also start sync setup:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SYNC=login ALIAZ_SYNC_USERNAME=ada sh
 ```
 
 To build from source, install Rust first if `cargo` is not already available:
@@ -58,6 +78,7 @@ Add an alias:
 
 ```sh
 aliaz add gs "git status"
+gs
 ```
 
 List aliases:
@@ -74,21 +95,15 @@ aliaz generate bash
 aliaz generate fish
 ```
 
-Install shell integration:
+If you skipped shell setup during installation, install it later:
 
 ```sh
 aliaz init zsh
 ```
 
-For zsh and bash, `init` writes a managed alias file and prints the `source`
-line to add to your shell startup file. For fish, `init` writes the managed fish
-configuration file directly.
-
-Restart your shell, or source the generated file, then use the alias:
-
-```sh
-gs
-```
+After shell integration is active, mutating commands such as `add`, `edit`,
+`rm`, `migrate`, `import`, and `sync` refresh aliases automatically in the
+current shell.
 
 ## Commands
 
@@ -165,11 +180,12 @@ fish
 aliaz init <shell>
 ```
 
-For zsh and bash, add the printed `source` line to your shell startup file after
-running `init`. Run `aliaz init <shell>` again whenever aliases change.
+For zsh and bash, `init` writes the managed alias file and adds the startup
+`source` line once. For fish, `init` writes the managed file used by fish
+automatically.
 
-For fish, `init` writes the managed file used by fish automatically. Restart the
-shell or open a new session after running it.
+Restart the shell or open a new session after running it manually. After that,
+Aliaz refreshes aliases automatically when you change them.
 
 ## Migrating Existing Aliases
 
@@ -239,6 +255,12 @@ Run sync:
 aliaz sync
 ```
 
+Log out of local sync state:
+
+```sh
+aliaz logout
+```
+
 For the privacy and threat model behind sync, see
 [Security and Privacy Model](docs/security.md).
 
@@ -304,8 +326,8 @@ aliaz init zsh
 aliaz doctor
 ```
 
-Replace `zsh` with your shell. For zsh and bash, confirm the printed `source`
-line is present in your shell startup file.
+Replace `zsh` with your shell. For zsh and bash, confirm the startup file has
+the Aliaz shell integration block.
 
 If sync fails because it is not configured, run `aliaz register` for a new
 account or `aliaz login` for an existing one.
