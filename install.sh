@@ -19,6 +19,23 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+has_tty() {
+  [ -r /dev/tty ] && [ -w /dev/tty ]
+}
+
+ask() {
+  prompt="$1"
+  default="${2:-}"
+  answer=""
+
+  printf '%s' "$prompt" > /dev/tty
+  IFS= read -r answer < /dev/tty || answer=""
+  if [ -z "$answer" ]; then
+    answer="$default"
+  fi
+  printf '%s\n' "$answer"
+}
+
 download() {
   url="$1"
   output="$2"
@@ -72,6 +89,96 @@ verify_checksum() {
   fi
 }
 
+default_shells() {
+  case "$(basename "${SHELL:-}")" in
+    zsh | bash | fish)
+      basename "$SHELL"
+      ;;
+    *)
+      printf '%s\n' "zsh"
+      ;;
+  esac
+}
+
+configure_shells() {
+  shells="${ALIAZ_INSTALL_SHELLS:-}"
+
+  if [ -z "$shells" ]; then
+    if has_tty; then
+      default="$(default_shells)"
+      shells="$(ask "aliaz install: configure shells [${default}; zsh bash fish, skip]: " "$default")"
+    else
+      say "aliaz install: shell integration skipped; set ALIAZ_INSTALL_SHELLS to configure non-interactively"
+      return 0
+    fi
+  fi
+
+  case "$shells" in
+    skip | none | no)
+      say "aliaz install: shell integration skipped"
+      return 0
+      ;;
+    all)
+      shells="zsh bash fish"
+      ;;
+  esac
+
+  for shell in $shells; do
+    case "$shell" in
+      zsh | bash | fish)
+        say "aliaz install: configuring $shell"
+        "$install_dir/aliaz" init "$shell"
+        ;;
+      *)
+        fail "unsupported shell for integration: $shell"
+        ;;
+    esac
+  done
+}
+
+setup_sync() {
+  mode="${ALIAZ_INSTALL_SYNC:-}"
+
+  if [ -z "$mode" ]; then
+    if ! has_tty; then
+      return 0
+    fi
+
+    sync_answer="$(ask "aliaz install: set up encrypted sync now? [y/N]: " "n")"
+    case "$sync_answer" in
+      y | Y | yes | YES)
+        mode="$(ask "aliaz install: sync command [login/register]: " "login")"
+        ;;
+      *)
+        return 0
+        ;;
+    esac
+  fi
+
+  case "$mode" in
+    skip | none | no)
+      return 0
+      ;;
+    login | register)
+      ;;
+    *)
+      fail "unsupported ALIAZ_INSTALL_SYNC value: $mode"
+      ;;
+  esac
+
+  username="${ALIAZ_SYNC_USERNAME:-}"
+  if [ -z "$username" ]; then
+    if has_tty; then
+      username="$(ask "aliaz install: username: " "")"
+    else
+      fail "ALIAZ_SYNC_USERNAME is required for non-interactive sync setup"
+    fi
+  fi
+
+  [ -n "$username" ] || fail "username is required for sync setup"
+  "$install_dir/aliaz" "$mode" --username "$username"
+}
+
 target="$(platform_target)"
 archive="aliaz-$target.tar.gz"
 
@@ -106,6 +213,9 @@ chmod 755 "$install_dir/aliaz"
   fail "installed binary did not run: $install_dir/aliaz"
 
 say "aliaz install: installed $install_dir/aliaz"
+
+configure_shells
+setup_sync
 
 case ":$PATH:" in
   *":$install_dir:"*) ;;

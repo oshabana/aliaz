@@ -55,7 +55,7 @@
             <p class="lead">
               Aliaz keeps the open-source command surface compact: local alias
               CRUD, shell output, migration, JSON portability, optional sync,
-              and health checks.
+              logout, and health checks.
             </p>
             <div class="actions">
               <a class="btn primary" href="#local">Local commands</a>
@@ -137,6 +137,13 @@
 <span class="dim">Wrote ~/.config/fish/conf.d/aliaz.fish</span></code></pre>
                 </div>
               </div>
+              <p>
+                For zsh and bash, <code>init</code> also updates the startup
+                file once. The managed integration refreshes aliases after
+                successful <code>add</code>, <code>edit</code>, <code>rm</code>,
+                <code>migrate</code>, <code>import</code>, and
+                <code>sync</code> commands.
+              </p>
             </section>
 
             <section id="portable">
@@ -208,7 +215,7 @@
                     <tr>
                       <td><code>init &lt;shell&gt;</code></td>
                       <td>Write managed shell files.</td>
-                      <td>zsh and bash print a source line.</td>
+                      <td>zsh and bash update the startup file once.</td>
                     </tr>
                     <tr>
                       <td><code>export --output &lt;path&gt;</code></td>
@@ -234,6 +241,11 @@
                       <td><code>sync</code></td>
                       <td>Pull and push encrypted alias records.</td>
                       <td>Requires register or login first.</td>
+                    </tr>
+                    <tr>
+                      <td><code>logout</code></td>
+                      <td>Remove local sync config and recovery material.</td>
+                      <td>Does not delete server-side account data.</td>
                     </tr>
                     <tr>
                       <td><code>status</code></td>

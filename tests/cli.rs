@@ -1,10 +1,12 @@
-use assert_cmd::Command;
+use assert_cmd::Command as AssertCommand;
 use predicates::prelude::*;
 use std::fs;
+use std::process::Command as ProcessCommand;
 use tempfile::TempDir;
 
-fn cmd(home: &TempDir) -> Command {
-    let mut command = Command::cargo_bin("aliaz").expect("binary exists");
+fn cmd(home: &TempDir) -> AssertCommand {
+    let mut command = AssertCommand::cargo_bin("aliaz").expect("binary exists");
+    command.env("HOME", home.path());
     command.env("ALIAS_TOOL_HOME", home.path());
     command.env("ALIAZ_CONFIG_HOME", home.path().join(".config"));
     command.env("ALIAZ_TEST_SECRET_HOME", home.path().join(".secrets"));
@@ -83,13 +85,13 @@ fn init_writes_managed_zsh_alias_file() {
         .args(["init", "zsh"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            r#"Add this line to your zsh startup file: source "$HOME/.config/aliaz/aliases.sh""#,
-        ));
+        .stdout(predicate::str::contains("Configured"));
 
     let aliases = fs::read_to_string(home.path().join(".config/aliaz/aliases.sh"))
         .expect("aliases.sh exists");
     assert!(aliases.contains("alias gs='git status'"));
+    assert!(aliases.contains("aliaz()"));
+    assert!(aliases.contains("source \"$HOME/.config/aliaz/aliases.sh\""));
 }
 
 #[test]
@@ -102,9 +104,7 @@ fn init_writes_managed_bash_alias_file() {
         .args(["init", "bash"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            r#"Add this line to your bash startup file: source "$HOME/.config/aliaz/aliases.sh""#,
-        ));
+        .stdout(predicate::str::contains("Configured"));
 
     let aliases = fs::read_to_string(home.path().join(".config/aliaz/aliases.sh"))
         .expect("aliases.sh exists");
@@ -129,6 +129,84 @@ fn init_writes_managed_fish_alias_file() {
     let aliases = fs::read_to_string(home.path().join(".config/fish/conf.d/aliaz.fish"))
         .expect("aliaz.fish exists");
     assert!(aliases.contains("alias gco 'git checkout'"));
+    assert!(aliases.contains("function aliaz"));
+}
+
+#[test]
+fn init_updates_zsh_startup_file_only_once() {
+    let home = TempDir::new().expect("temp home");
+
+    cmd(&home).args(["init", "zsh"]).assert().success();
+    cmd(&home).args(["init", "zsh"]).assert().success();
+
+    let zshrc = fs::read_to_string(home.path().join(".zshrc")).expect(".zshrc exists");
+    let source_line = r#"source "$HOME/.config/aliaz/aliases.sh""#;
+    assert_eq!(zshrc.matches(source_line).count(), 1);
+}
+
+#[test]
+fn bash_wrapper_refreshes_aliases_after_add_in_same_shell() {
+    let home = TempDir::new().expect("temp home");
+    let bin = assert_cmd::cargo::cargo_bin("aliaz");
+    let bin_dir = bin.parent().expect("binary parent");
+
+    let output = ProcessCommand::new("bash")
+        .arg("-lc")
+        .arg(
+            r#"
+            shopt -s expand_aliases
+            aliaz init bash >/dev/null
+            source "$HOME/.config/aliaz/aliases.sh"
+            aliaz add hi "printf aliaz-ok" >/dev/null
+            hi
+            "#,
+        )
+        .env("HOME", home.path())
+        .env("ALIAS_TOOL_HOME", home.path())
+        .env("ALIAZ_CONFIG_HOME", home.path().join(".config"))
+        .env("ALIAZ_TEST_SECRET_HOME", home.path().join(".secrets"))
+        .env("PATH", format!("{}:/usr/bin:/bin", bin_dir.display()))
+        .output()
+        .expect("run bash");
+
+    assert!(
+        output.status.success(),
+        "bash failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "aliaz-ok");
+}
+
+#[test]
+fn logout_removes_local_sync_config_and_recovery_phrase() {
+    let home = TempDir::new().expect("temp home");
+    let config_dir = home.path().join(".config/aliaz");
+    let secret_dir = home.path().join(".secrets");
+    fs::create_dir_all(&config_dir).expect("config dir");
+    fs::create_dir_all(&secret_dir).expect("secret dir");
+    fs::write(
+        config_dir.join("config.json"),
+        r#"{
+  "sync_url": "https://sync.example",
+  "username": "ada",
+  "user_id": "user-1",
+  "token": "token-1",
+  "latest_version": 7
+}
+"#,
+    )
+    .expect("config");
+    fs::write(secret_dir.join("user-1"), "recovery phrase").expect("secret");
+
+    cmd(&home)
+        .args(["logout"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Logged out ada"));
+
+    assert!(!config_dir.join("config.json").exists());
+    assert!(!secret_dir.join("user-1").exists());
 }
 
 #[test]

@@ -80,6 +80,7 @@ enum Commands {
         #[arg(long, default_value = DEFAULT_SYNC_URL)]
         sync_url: String,
     },
+    Logout,
     Sync,
     Status,
     Doctor,
@@ -233,11 +234,9 @@ fn main() -> Result<()> {
             let path = write_shell_integration(&shell, &aliases)?;
             match shell {
                 Shell::Zsh | Shell::Bash => {
-                    println!(
-                        "Wrote {}. Add this line to your {} startup file: source \"$HOME/.config/aliaz/aliases.sh\"",
-                        path.display(),
-                        shell.name()
-                    );
+                    let startup_path = configure_startup_file(&shell, &path)?;
+                    println!("Wrote {}", path.display());
+                    println!("Configured {}", startup_path.display());
                 }
                 Shell::Fish => {
                     println!("Wrote {}", path.display());
@@ -322,6 +321,15 @@ fn main() -> Result<()> {
             save_config(&login_config(&sync_url, &username, response))?;
             println!("Logged in {username}");
         }
+        Commands::Logout => {
+            if let Some(config) = load_config()? {
+                remove_recovery_phrase(&config.user_id)?;
+                remove_config()?;
+                println!("Logged out {}", config.username);
+            } else {
+                println!("Sync was not configured");
+            }
+        }
         Commands::Sync => {
             let mut config = load_config()?.ok_or_else(|| {
                 anyhow!("sync is not configured; run aliaz register or aliaz login first")
@@ -382,6 +390,10 @@ fn default_zshrc_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".zshrc")
+}
+
+fn home_dir() -> Result<PathBuf> {
+    dirs::home_dir().ok_or_else(|| anyhow!("could not locate home directory"))
 }
 
 struct Store {
@@ -689,22 +701,24 @@ fn shell_quote(value: &str) -> String {
     format!("'{escaped}'")
 }
 
-impl Shell {
-    fn name(&self) -> &'static str {
-        match self {
-            Shell::Zsh => "zsh",
-            Shell::Bash => "bash",
-            Shell::Fish => "fish",
-        }
-    }
-}
-
 fn config_home() -> Result<PathBuf> {
     if let Some(home) = std::env::var_os("ALIAZ_CONFIG_HOME") {
         return Ok(PathBuf::from(home));
     }
 
     dirs::config_dir().ok_or_else(|| anyhow!("could not locate config directory"))
+}
+
+fn shell_config_home() -> Result<PathBuf> {
+    if let Some(home) = std::env::var_os("ALIAZ_CONFIG_HOME") {
+        return Ok(PathBuf::from(home));
+    }
+
+    if let Some(home) = std::env::var_os("XDG_CONFIG_HOME") {
+        return Ok(PathBuf::from(home));
+    }
+
+    Ok(home_dir()?.join(".config"))
 }
 
 fn config_path() -> Result<PathBuf> {
@@ -755,6 +769,15 @@ fn save_config(config: &SyncConfig) -> Result<()> {
     Ok(())
 }
 
+fn remove_config() -> Result<()> {
+    let path = config_path()?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
+    }
+}
+
 fn store_recovery_phrase(user_id: &str, recovery_phrase: &str) -> Result<()> {
     if let Some(secret_home) = test_secret_home() {
         fs::create_dir_all(&secret_home)
@@ -781,6 +804,24 @@ fn load_recovery_phrase(user_id: &str) -> Result<String> {
         .context("recovery phrase is missing from OS credential store")
 }
 
+fn remove_recovery_phrase(user_id: &str) -> Result<()> {
+    if let Some(secret_home) = test_secret_home() {
+        let path = secret_home.join(secret_file_name(user_id));
+        match fs::remove_file(&path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to remove {}", path.display()));
+            }
+        }
+    }
+
+    match Entry::new(KEYRING_SERVICE, user_id)?.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(_) => Ok(()),
+    }
+}
+
 fn recovery_phrase_available(user_id: &str) -> bool {
     load_recovery_phrase(user_id).is_ok()
 }
@@ -804,8 +845,8 @@ fn secret_file_name(user_id: &str) -> String {
 
 fn write_shell_integration(shell: &Shell, aliases: &[Alias]) -> Result<PathBuf> {
     let path = match shell {
-        Shell::Zsh | Shell::Bash => config_home()?.join("aliaz").join("aliases.sh"),
-        Shell::Fish => config_home()?
+        Shell::Zsh | Shell::Bash => shell_config_home()?.join("aliaz").join("aliases.sh"),
+        Shell::Fish => shell_config_home()?
             .join("fish")
             .join("conf.d")
             .join("aliaz.fish"),
@@ -816,12 +857,127 @@ fn write_shell_integration(shell: &Shell, aliases: &[Alias]) -> Result<PathBuf> 
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
 
-    let mut contents = shell_alias_lines(shell, aliases).join("\n");
-    if !contents.is_empty() {
-        contents.push('\n');
-    }
+    let contents = shell_integration_contents(shell, aliases, &path)?;
     fs::write(&path, contents).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(path)
+}
+
+fn shell_integration_contents(shell: &Shell, aliases: &[Alias], path: &PathBuf) -> Result<String> {
+    let binary = std::env::current_exe().context("failed to locate aliaz binary")?;
+    let binary = binary
+        .to_str()
+        .ok_or_else(|| anyhow!("aliaz binary path is not valid UTF-8"))?;
+    let source_command = sh_source_command(path)?;
+    let mut lines = match shell {
+        Shell::Zsh | Shell::Bash => sh_wrapper_lines(binary, &source_command),
+        Shell::Fish => fish_wrapper_lines(binary, path),
+    };
+    lines.extend(shell_alias_lines(shell, aliases));
+    let mut contents = lines.join("\n");
+    contents.push('\n');
+    Ok(contents)
+}
+
+fn sh_source_command(path: &PathBuf) -> Result<String> {
+    Ok(format!("source {}", sh_source_path_token(path)?))
+}
+
+fn sh_source_path_token(path: &PathBuf) -> Result<String> {
+    let default_path = home_dir()?.join(".config").join("aliaz").join("aliases.sh");
+    if *path == default_path {
+        Ok(r#""$HOME/.config/aliaz/aliases.sh""#.to_owned())
+    } else {
+        Ok(shell_quote(&path.display().to_string()))
+    }
+}
+
+fn sh_wrapper_lines(binary: &str, source_command: &str) -> Vec<String> {
+    vec![
+        "# Managed by Aliaz. Do not edit.".to_owned(),
+        format!("__aliaz_bin={}", shell_quote(binary)),
+        "aliaz() {".to_owned(),
+        "  local __aliaz_status".to_owned(),
+        "  local __aliaz_shell".to_owned(),
+        "  \"$__aliaz_bin\" \"$@\"".to_owned(),
+        "  __aliaz_status=$?".to_owned(),
+        "  if [ $__aliaz_status -eq 0 ]; then".to_owned(),
+        "    case \"${1:-}\" in".to_owned(),
+        "      add|edit|rm|delete|migrate|import|sync)".to_owned(),
+        "        __aliaz_shell=\"\"".to_owned(),
+        "        if [ -n \"${ZSH_VERSION:-}\" ]; then".to_owned(),
+        "          __aliaz_shell=\"zsh\"".to_owned(),
+        "        elif [ -n \"${BASH_VERSION:-}\" ]; then".to_owned(),
+        "          __aliaz_shell=\"bash\"".to_owned(),
+        "        fi".to_owned(),
+        "        if [ -n \"$__aliaz_shell\" ]; then".to_owned(),
+        format!(
+            "          \"$__aliaz_bin\" init \"$__aliaz_shell\" >/dev/null && {}",
+            source_command
+        ),
+        "        fi".to_owned(),
+        "        ;;".to_owned(),
+        "    esac".to_owned(),
+        "  fi".to_owned(),
+        "  return $__aliaz_status".to_owned(),
+        "}".to_owned(),
+        "".to_owned(),
+    ]
+}
+
+fn fish_wrapper_lines(binary: &str, path: &PathBuf) -> Vec<String> {
+    vec![
+        "# Managed by Aliaz. Do not edit.".to_owned(),
+        format!("set -g __aliaz_bin {}", shell_quote(binary)),
+        "function aliaz".to_owned(),
+        "  \"$__aliaz_bin\" $argv".to_owned(),
+        "  set -l __aliaz_status $status".to_owned(),
+        "  if test $__aliaz_status -eq 0".to_owned(),
+        "    switch $argv[1]".to_owned(),
+        "      case add edit rm delete migrate import sync".to_owned(),
+        "        \"$__aliaz_bin\" init fish >/dev/null".to_owned(),
+        format!(
+            "        source {}",
+            shell_quote(&path.display().to_string())
+        ),
+        "    end".to_owned(),
+        "  end".to_owned(),
+        "  return $__aliaz_status".to_owned(),
+        "end".to_owned(),
+        "".to_owned(),
+    ]
+}
+
+fn configure_startup_file(shell: &Shell, integration_path: &PathBuf) -> Result<PathBuf> {
+    let startup_path = match shell {
+        Shell::Zsh => home_dir()?.join(".zshrc"),
+        Shell::Bash => home_dir()?.join(".bashrc"),
+        Shell::Fish => bail!("fish does not use a zsh/bash startup file"),
+    };
+    let source_line = sh_source_command(integration_path)?;
+    let comment = "# Aliaz shell integration";
+    let existing = match fs::read_to_string(&startup_path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read {}", startup_path.display()));
+        }
+    };
+    if existing.contains(&source_line) {
+        return Ok(startup_path);
+    }
+
+    let mut contents = existing;
+    if !contents.is_empty() && !contents.ends_with('\n') {
+        contents.push('\n');
+    }
+    contents.push_str(comment);
+    contents.push('\n');
+    contents.push_str(&source_line);
+    contents.push('\n');
+    fs::write(&startup_path, contents)
+        .with_context(|| format!("failed to write {}", startup_path.display()))?;
+    Ok(startup_path)
 }
 
 fn shell_alias_lines(shell: &Shell, aliases: &[Alias]) -> Vec<String> {
@@ -970,8 +1126,8 @@ fn decrypt_alias(key: &[u8; 32], encrypted_blob: &str) -> Result<AliasPayload> {
 }
 
 fn report_integration_status() -> Result<()> {
-    let sh_path = config_home()?.join("aliaz").join("aliases.sh");
-    let fish_path = config_home()?
+    let sh_path = shell_config_home()?.join("aliaz").join("aliases.sh");
+    let fish_path = shell_config_home()?
         .join("fish")
         .join("conf.d")
         .join("aliaz.fish");

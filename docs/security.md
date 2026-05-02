@@ -62,6 +62,21 @@ This means the account password and recovery phrase have different jobs. The
 password proves you are allowed to access the account. The recovery phrase is
 what makes the encrypted alias data readable.
 
+## Logging out on one machine
+
+When you run:
+
+```sh
+aliaz logout
+```
+
+Aliaz removes the local sync configuration and deletes the locally stored
+recovery phrase for the configured account. This disconnects the current machine
+from sync until you run `aliaz login` again.
+
+Logout does not delete the local alias database, the generated shell integration
+files, or server-side account data.
+
 ## What is encrypted
 
 Synced alias records are encrypted on the client before upload. The encrypted
