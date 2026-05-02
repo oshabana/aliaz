@@ -1,0 +1,14 @@
+{
+  "name": "aliaz-sync-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "worker:dev": "wrangler dev",
+    "worker:deploy:dry-run": "wrangler deploy --dry-run",
+    "worker:migrations:local": "wrangler d1 migrations apply aliaz-sync --local"
+  },
+  "devDependencies": {
+    "wrangler": "^4.87.0"
+  }
+}
