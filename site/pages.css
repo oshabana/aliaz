@@ -600,46 +600,38 @@ footer {
 
 pre.has-copy-btn {
   position: relative;
+  padding-right: 56px;
 }
 
 .copy-btn {
   position: absolute;
-  top: 10px;
-  right: 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 10px;
+  top: 12px;
+  right: 12px;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   border: 1px solid var(--dark-border);
   border-radius: 7px;
-  background: oklch(100% 0 0 / 6%);
-  color: var(--dark-fg);
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.02em;
+  background: oklch(100% 0 0 / 4%);
+  color: var(--dark-muted);
   cursor: pointer;
-  opacity: 0;
-  transform: translateY(-2px);
   transition:
-    opacity 140ms ease,
-    transform 140ms ease,
     border-color 140ms ease,
     background 140ms ease,
-    color 140ms ease;
-}
-
-pre.has-copy-btn:hover .copy-btn,
-pre.has-copy-btn:focus-within .copy-btn,
-.copy-btn:focus-visible,
-.copy-btn.is-copied {
-  opacity: 1;
-  transform: translateY(0);
+    color 140ms ease,
+    transform 140ms ease;
 }
 
 .copy-btn:hover {
   border-color: oklch(58% 0.18 255 / 58%);
   background: oklch(100% 0 0 / 10%);
+  color: var(--dark-fg);
+}
+
+.copy-btn:active {
+  transform: scale(0.96);
 }
 
 .copy-btn:focus-visible {
@@ -653,13 +645,25 @@ pre.has-copy-btn:focus-within .copy-btn,
   background: oklch(72% 0.15 150 / 12%);
 }
 
-.copy-btn-icon {
-  flex: 0 0 auto;
+.copy-btn.is-failed {
+  border-color: oklch(66% 0.16 28 / 55%);
+  color: oklch(72% 0.16 28);
+  background: oklch(66% 0.16 28 / 12%);
 }
 
-@media (max-width: 740px) {
-  .copy-btn {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.copy-btn-icon {
+  flex: 0 0 auto;
+  grid-area: 1 / 1;
+}
+
+.copy-btn-icon-check {
+  display: none;
+}
+
+.copy-btn.is-copied .copy-btn-icon-copy {
+  display: none;
+}
+
+.copy-btn.is-copied .copy-btn-icon-check {
+  display: block;
 }
