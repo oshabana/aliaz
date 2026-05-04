@@ -18,19 +18,22 @@
     btn.className = "copy-btn";
     btn.setAttribute("aria-label", "Copy commands");
     btn.innerHTML =
-      '<svg class="copy-btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg><span class="copy-btn-label">Copy</span>';
+      '<svg class="copy-btn-icon copy-btn-icon-copy" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg><svg class="copy-btn-icon copy-btn-icon-check" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L20 6.5"/></svg><span class="copy-btn-label" hidden>Copy</span>';
     return btn;
   }
 
-  function flash(btn, label) {
-    const span = btn.querySelector(".copy-btn-label");
-    const prev = span.textContent;
-    span.textContent = label;
-    btn.classList.add("is-copied");
+  function flash(btn, ok) {
+    btn.setAttribute(
+      "aria-label",
+      ok ? "Copied to clipboard" : "Copy failed",
+    );
+    btn.classList.toggle("is-copied", !!ok);
+    btn.classList.toggle("is-failed", !ok);
     clearTimeout(btn._t);
     btn._t = setTimeout(function () {
-      span.textContent = prev;
       btn.classList.remove("is-copied");
+      btn.classList.remove("is-failed");
+      btn.setAttribute("aria-label", "Copy commands");
     }, 1600);
   }
 
@@ -66,7 +69,7 @@
     btn.addEventListener("click", async function () {
       const text = extractCommands(pre);
       const ok = await copyText(text);
-      flash(btn, ok ? "Copied" : "Failed");
+      flash(btn, ok);
     });
     pre.appendChild(btn);
   }
