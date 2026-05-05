@@ -97,15 +97,9 @@
                 the binary. When a terminal is available, it can ask which
                 shells to configure.
               </p>
-              <div class="terminal">
-                <div class="terminal-head">
-                  <div class="lights" aria-hidden="true">
-                    <i></i><i></i><i></i>
-                  </div>
-                  <span>install</span>
-                </div>
-                <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | sh
-<span class="prompt">$</span> aliaz --help</code></pre>
+              <div class="cmd-list">
+                <div class="cmd"><code>curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | sh</code></div>
+                <div class="cmd"><code>aliaz --help</code></div>
               </div>
             </section>
 
@@ -121,8 +115,10 @@
                     installs now use numbered menus instead of free-text shell
                     names.
                   </p>
-                  <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SHELLS="zsh bash" sh
-<span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SHELLS=skip sh</code></pre>
+                  <div class="cmd-list">
+                    <div class="cmd"><code>curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SHELLS="zsh bash" sh</code></div>
+                    <div class="cmd"><code>curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SHELLS=skip sh</code></div>
+                  </div>
                 </div>
                 <div class="panel">
                   <h3>Start sync setup</h3>
@@ -133,7 +129,9 @@
                     non-interactive runs also need
                     <code>ALIAZ_SYNC_USERNAME</code>.
                   </p>
-                  <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SYNC=login ALIAZ_SYNC_USERNAME=ada sh</code></pre>
+                  <div class="cmd-list">
+                    <div class="cmd"><code>curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SYNC=login ALIAZ_SYNC_USERNAME=ada sh</code></div>
+                  </div>
                 </div>
                 <div class="panel">
                   <h3>Update later</h3>
@@ -141,19 +139,25 @@
                     Use <code>aliaz update</code> to download and install the
                     latest release for the current platform.
                   </p>
-                  <pre><code><span class="prompt">$</span> aliaz update</code></pre>
+                  <div class="cmd-list">
+                    <div class="cmd"><code>aliaz update</code></div>
+                  </div>
                 </div>
                 <div class="panel">
                   <h3>Install a version</h3>
                   <p>Set <code>ALIAZ_VERSION</code> before the shell script.</p>
-                  <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.2 sh</code></pre>
+                  <div class="cmd-list">
+                    <div class="cmd"><code>curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.2 sh</code></div>
+                  </div>
                 </div>
                 <div class="panel">
                   <h3>Change install dir</h3>
                   <p>
                     Use <code>ALIAZ_INSTALL_DIR</code> for another binary path.
                   </p>
-                  <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_DIR=/usr/local/bin sh</code></pre>
+                  <div class="cmd-list">
+                    <div class="cmd"><code>curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_DIR=/usr/local/bin sh</code></div>
+                  </div>
                 </div>
               </div>
             </section>
@@ -165,16 +169,10 @@
                 Install Rust if needed, then install Aliaz from the open-source
                 GitHub repository checkout.
               </p>
-              <div class="terminal">
-                <div class="terminal-head">
-                  <div class="lights" aria-hidden="true">
-                    <i></i><i></i><i></i>
-                  </div>
-                  <span>source build</span>
-                </div>
-                <pre><code><span class="prompt">$</span> cargo install --path .
-<span class="prompt">$</span> cargo run -- --help
-<span class="prompt">$</span> cargo run -- add gs "git status"</code></pre>
+              <div class="cmd-list">
+                <div class="cmd"><code>cargo install --path .</code></div>
+                <div class="cmd"><code>cargo run -- --help</code></div>
+                <div class="cmd"><code>cargo run -- add gs "git status"</code></div>
               </div>
             </section>
 
@@ -187,16 +185,10 @@
                 shell setup, run <code>aliaz init zsh</code>,
                 <code>aliaz init bash</code>, or <code>aliaz init fish</code>.
               </p>
-              <div class="terminal">
-                <div class="terminal-head">
-                  <div class="lights" aria-hidden="true">
-                    <i></i><i></i><i></i>
-                  </div>
-                  <span>verify</span>
-                </div>
-                <pre><code><span class="prompt">$</span> aliaz --help
-<span class="dim">Manage shell aliases from a local SQLite-backed source of truth</span></code></pre>
+              <div class="cmd-list">
+                <div class="cmd"><code>aliaz --help</code></div>
               </div>
+              <p class="dim">Output: <code>Manage shell aliases from a local SQLite-backed source of truth</code></p>
             </section>
           </article>
 

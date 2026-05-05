@@ -74,8 +74,23 @@
     pre.appendChild(btn);
   }
 
+  function attachCmd(row) {
+    if (row.dataset.copyAttached) return;
+    const code = row.querySelector("code");
+    if (!code) return;
+    row.dataset.copyAttached = "1";
+    const btn = makeButton();
+    btn.addEventListener("click", async function () {
+      const text = code.innerText.replace(/\s+$/, "");
+      const ok = await copyText(text);
+      flash(btn, ok);
+    });
+    row.appendChild(btn);
+  }
+
   function init() {
     document.querySelectorAll("pre").forEach(attach);
+    document.querySelectorAll(".cmd").forEach(attachCmd);
   }
 
   if (document.readyState === "loading") {

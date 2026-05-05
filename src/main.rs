@@ -5,7 +5,7 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit},
 };
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use flate2::read::GzDecoder;
 use hkdf::Hkdf;
 use keyring::Entry;
@@ -205,6 +205,10 @@ struct UploadRecord {
 }
 
 fn main() -> Result<()> {
+    if print_migrate_help_if_requested()? {
+        return Ok(());
+    }
+
     let cli = Cli::parse();
     let db_path = database_path()?;
     let store = Store::open(db_path)?;
@@ -422,6 +426,27 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn print_migrate_help_if_requested() -> Result<bool> {
+    let mut args = std::env::args_os();
+    let _binary_name = args.next();
+    match (args.next(), args.next(), args.next()) {
+        (Some(command), Some(help), None) if command == "migrate" && help == "help" => {
+            let mut cli = Cli::command();
+            let migrate = cli
+                .find_subcommand_mut("migrate")
+                .expect("migrate subcommand exists");
+            let help = format!("{}", migrate.render_help()).replacen(
+                "Usage: migrate",
+                "Usage: aliaz migrate",
+                1,
+            );
+            println!("{help}");
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
 }
 
 fn database_path() -> Result<PathBuf> {
