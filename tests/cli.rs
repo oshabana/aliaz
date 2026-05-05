@@ -1,8 +1,12 @@
 use assert_cmd::Command as AssertCommand;
 use predicates::prelude::*;
 use std::fs;
+use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 use tempfile::TempDir;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 fn cmd(home: &TempDir) -> AssertCommand {
     let mut command = AssertCommand::cargo_bin("aliaz").expect("binary exists");
@@ -11,6 +15,21 @@ fn cmd(home: &TempDir) -> AssertCommand {
     command.env("ALIAZ_CONFIG_HOME", home.path().join(".config"));
     command.env("ALIAZ_TEST_SECRET_HOME", home.path().join(".secrets"));
     command
+}
+
+fn copied_binary(home: &TempDir) -> PathBuf {
+    let source = assert_cmd::cargo::cargo_bin("aliaz");
+    let target = home.path().join("aliaz-copy");
+    fs::copy(&source, &target).expect("copy binary");
+
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&target).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&target, permissions).expect("set executable bit");
+    }
+
+    target
 }
 
 #[test]
@@ -210,6 +229,73 @@ fn logout_removes_local_sync_config_and_recovery_phrase() {
 }
 
 #[test]
+fn uninstall_removes_shell_integration_and_keeps_data() {
+    let home = TempDir::new().expect("temp home");
+    let config_dir = home.path().join(".config/aliaz");
+    let aliases_dir = home.path().join(".config/aliaz");
+    let zshrc = home.path().join(".zshrc");
+    let binary = copied_binary(&home);
+
+    fs::create_dir_all(&config_dir).expect("config dir");
+    fs::write(
+        config_dir.join("config.json"),
+        r#"{
+  "sync_url": "https://sync.example",
+  "username": "ada",
+  "user_id": "user-1",
+  "token": "token-1",
+  "latest_version": 7
+}
+"#,
+    )
+    .expect("config");
+
+    let add_output = ProcessCommand::new(&binary)
+        .args(["add", "gs", "git status"])
+        .env("HOME", home.path())
+        .env("ALIAS_TOOL_HOME", home.path())
+        .env("ALIAZ_CONFIG_HOME", home.path().join(".config"))
+        .env("ALIAZ_TEST_SECRET_HOME", home.path().join(".secrets"))
+        .output()
+        .expect("add alias");
+    assert!(add_output.status.success(), "add failed");
+
+    let init_output = ProcessCommand::new(&binary)
+        .args(["init", "zsh"])
+        .env("HOME", home.path())
+        .env("ALIAS_TOOL_HOME", home.path())
+        .env("ALIAZ_CONFIG_HOME", home.path().join(".config"))
+        .env("ALIAZ_TEST_SECRET_HOME", home.path().join(".secrets"))
+        .output()
+        .expect("init zsh");
+    assert!(init_output.status.success(), "init failed");
+
+    assert!(aliases_dir.join("aliases.sh").exists());
+    assert!(zshrc.exists());
+
+    let uninstall_output = ProcessCommand::new(&binary)
+        .args(["uninstall"])
+        .env("HOME", home.path())
+        .env("ALIAS_TOOL_HOME", home.path())
+        .env("ALIAZ_CONFIG_HOME", home.path().join(".config"))
+        .env("ALIAZ_TEST_SECRET_HOME", home.path().join(".secrets"))
+        .output()
+        .expect("uninstall");
+    assert!(uninstall_output.status.success(), "uninstall failed");
+
+    assert!(!binary.exists());
+    assert!(!aliases_dir.join("aliases.sh").exists());
+    assert!(!zshrc.exists());
+    assert!(config_dir.join("config.json").exists());
+
+    cmd(&home)
+        .args(["list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("gs\tgit status"));
+}
+
+#[test]
 fn key_prints_the_stored_recovery_phrase() {
     let home = TempDir::new().expect("temp home");
     let config_dir = home.path().join(".config/aliaz");
@@ -331,4 +417,42 @@ fn status_and_doctor_report_local_state() {
         .stdout(predicate::str::contains("database: ok"))
         .stdout(predicate::str::contains("zsh/bash integration: ok"))
         .stdout(predicate::str::contains("sync config: missing"));
+}
+
+#[test]
+fn doctor_fix_repairs_missing_shell_integration() {
+    let home = TempDir::new().expect("temp home");
+    let aliases_path = home.path().join(".config/aliaz/aliases.sh");
+    let zshrc = home.path().join(".zshrc");
+
+    cmd(&home)
+        .args(["add", "gs", "git status"])
+        .assert()
+        .success();
+
+    cmd(&home)
+        .env("SHELL", "/bin/zsh")
+        .args(["doctor", "--fix"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("repaired zsh integration"));
+
+    assert!(aliases_path.exists());
+    assert!(zshrc.exists());
+    assert!(
+        fs::read_to_string(&aliases_path)
+            .expect("aliases")
+            .contains("alias gs='git status'")
+    );
+    assert!(
+        fs::read_to_string(&zshrc)
+            .expect("zshrc")
+            .contains(r#"source "$HOME/.config/aliaz/aliases.sh""#)
+    );
+
+    cmd(&home)
+        .args(["list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("gs\tgit status"));
 }

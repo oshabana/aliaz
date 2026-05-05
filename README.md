@@ -79,7 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | AL
 Install a specific version:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.1 sh
+curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.2 sh
 ```
 
 Install to a different directory:
@@ -108,6 +108,15 @@ aliaz update
 
 `update` downloads the latest release for the current platform and replaces the
 installed binary in place.
+
+Remove Aliaz from the current machine:
+
+```sh
+aliaz uninstall
+```
+
+`uninstall` removes the shell integration and the installed binary, while
+keeping your aliases database and sync settings.
 
 To build from source, install Rust first if `cargo` is not already available:
 
@@ -362,6 +371,15 @@ aliaz doctor
 
 This verifies the database, shell integration files, sync configuration, and
 secret storage.
+
+If shell integration is missing or broken, run:
+
+```sh
+aliaz doctor --fix
+```
+
+`--fix` refreshes the managed shell files and startup hooks without touching
+your aliases or sync data.
 
 ## Storage
 
