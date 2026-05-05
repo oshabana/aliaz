@@ -111,13 +111,15 @@
 
             <section id="options">
               <div class="kicker">Options</div>
-              <h2>Script shell setup, sync setup, version, or destination.</h2>
+              <h2>Script shell setup, sync setup, updates, version, or destination.</h2>
               <div class="grid-2">
                 <div class="panel">
                   <h3>Configure shells</h3>
                   <p>
                     Set <code>ALIAZ_INSTALL_SHELLS</code> to one or more shell
-                    names, <code>all</code>, or <code>skip</code>.
+                    names, <code>all</code>, or <code>skip</code>. Interactive
+                    installs now use numbered menus instead of free-text shell
+                    names.
                   </p>
                   <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SHELLS="zsh bash" sh
 <span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SHELLS=skip sh</code></pre>
@@ -126,11 +128,20 @@
                   <h3>Start sync setup</h3>
                   <p>
                     Use <code>ALIAZ_INSTALL_SYNC</code> with
-                    <code>login</code> or <code>register</code>.
-                    Non-interactive runs also need
+                    <code>login</code>, <code>register</code>, or
+                    <code>skip</code>. Interactive installs use a menu, and
+                    non-interactive runs also need
                     <code>ALIAZ_SYNC_USERNAME</code>.
                   </p>
                   <pre><code><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SYNC=login ALIAZ_SYNC_USERNAME=ada sh</code></pre>
+                </div>
+                <div class="panel">
+                  <h3>Update later</h3>
+                  <p>
+                    Use <code>aliaz update</code> to download and install the
+                    latest release for the current platform.
+                  </p>
+                  <pre><code><span class="prompt">$</span> aliaz update</code></pre>
                 </div>
                 <div class="panel">
                   <h3>Install a version</h3>
