@@ -6,17 +6,20 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit},
 };
 use clap::{Parser, Subcommand, ValueEnum};
+use flate2::read::GzDecoder;
 use hkdf::Hkdf;
 use keyring::Entry;
 use rand::RngCore;
 use reqwest::blocking::Client;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::io::Cursor;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tar::Archive;
 use uuid::Uuid;
 
 const DEFAULT_SYNC_URL: &str = "https://aliaz-sync.still-silence-6a39.workers.dev";
@@ -55,6 +58,7 @@ enum Commands {
     Generate {
         shell: Shell,
     },
+    Update,
     Export {
         #[arg(long)]
         output: Option<PathBuf>,
@@ -80,6 +84,7 @@ enum Commands {
         #[arg(long, default_value = DEFAULT_SYNC_URL)]
         sync_url: String,
     },
+    Key,
     Logout,
     Sync,
     Status,
@@ -248,6 +253,12 @@ fn main() -> Result<()> {
                 println!("{line}");
             }
         }
+        Commands::Update => {
+            update_release_binary(
+                &std::env::current_exe().context("failed to locate current executable")?,
+            )?;
+            println!("Updated to latest release");
+        }
         Commands::Export { output } => {
             let aliases = store.list()?;
             let export = ExportFile {
@@ -320,6 +331,13 @@ fn main() -> Result<()> {
             store_recovery_phrase(&response.user_id, &recovery_phrase)?;
             save_config(&login_config(&sync_url, &username, response))?;
             println!("Logged in {username}");
+        }
+        Commands::Key => {
+            let config = load_config()?.ok_or_else(|| {
+                anyhow!("sync is not configured; run aliaz register or aliaz login first")
+            })?;
+            let recovery_phrase = load_recovery_phrase(&config.user_id)?;
+            println!("{recovery_phrase}");
         }
         Commands::Logout => {
             if let Some(config) = load_config()? {
@@ -394,6 +412,132 @@ fn default_zshrc_path() -> PathBuf {
 
 fn home_dir() -> Result<PathBuf> {
     dirs::home_dir().ok_or_else(|| anyhow!("could not locate home directory"))
+}
+
+fn release_base_url() -> String {
+    std::env::var("ALIAZ_RELEASE_BASE_URL")
+        .unwrap_or_else(|_| "https://github.com/oshabana/aliaz/releases/latest/download".to_owned())
+}
+
+fn release_target() -> Result<String> {
+    let target = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        (os, arch) => bail!("unsupported platform for update: {os} {arch}"),
+    };
+    Ok(target.to_owned())
+}
+
+fn download_text(url: &str) -> Result<String> {
+    Ok(reqwest::blocking::get(url)?
+        .error_for_status()
+        .with_context(|| format!("failed to download {url}"))?
+        .text()?)
+}
+
+fn download_bytes(url: &str) -> Result<Vec<u8>> {
+    Ok(reqwest::blocking::get(url)?
+        .error_for_status()
+        .with_context(|| format!("failed to download {url}"))?
+        .bytes()?
+        .to_vec())
+}
+
+fn checksum_for_asset(checksums: &str, asset_name: &str) -> Result<String> {
+    for line in checksums.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let mut parts = line.split_whitespace();
+        let checksum = parts.next();
+        let asset = parts.next();
+        if let (Some(checksum), Some(asset)) = (checksum, asset) {
+            if asset.trim_start_matches('*') == asset_name {
+                return Ok(checksum.to_owned());
+            }
+        }
+    }
+
+    bail!("checksum for {asset_name} was not found")
+}
+
+fn verify_checksum(bytes: &[u8], expected_checksum: &str) -> Result<()> {
+    let actual = format!("{:x}", Sha256::digest(bytes));
+    if actual != expected_checksum {
+        bail!("downloaded archive checksum did not match");
+    }
+    Ok(())
+}
+
+fn extract_release_binary(archive_bytes: &[u8], output_dir: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(output_dir)
+        .with_context(|| format!("failed to create {}", output_dir.display()))?;
+
+    let cursor = Cursor::new(archive_bytes);
+    let gz = GzDecoder::new(cursor);
+    let mut archive = Archive::new(gz);
+    archive
+        .unpack(output_dir)
+        .with_context(|| format!("failed to unpack {}", output_dir.display()))?;
+
+    let binary_path = output_dir.join("aliaz");
+    if binary_path.exists() {
+        Ok(binary_path)
+    } else {
+        bail!("release archive did not contain aliaz")
+    }
+}
+
+fn install_updated_binary(source: &Path, destination: &Path) -> Result<()> {
+    fs::copy(source, destination).with_context(|| {
+        format!(
+            "failed to install updated binary to {}",
+            destination.display()
+        )
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(destination)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(destination, permissions)?;
+    }
+
+    Ok(())
+}
+
+fn update_release_binary(destination: &Path) -> Result<()> {
+    let base_url = release_base_url();
+    update_release_binary_from_base_url(destination, &base_url)
+}
+
+fn update_release_binary_from_base_url(destination: &Path, base_url: &str) -> Result<()> {
+    let target = release_target()?;
+    let archive_name = format!("aliaz-{target}.tar.gz");
+    let checksums_url = format!("{base_url}/checksums.txt");
+    let archive_url = format!("{base_url}/{archive_name}");
+
+    let checksums = download_text(&checksums_url)?;
+    let expected_checksum = checksum_for_asset(&checksums, &archive_name)?;
+    let archive_bytes = download_bytes(&archive_url)?;
+    verify_checksum(&archive_bytes, &expected_checksum)?;
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "aliaz-update-{}-{}",
+        std::process::id(),
+        now_unix()?
+    ));
+    let release_dir = temp_dir.join("release");
+    let binary_path = extract_release_binary(&archive_bytes, &release_dir)?;
+    install_updated_binary(&binary_path, destination)?;
+
+    let _ = fs::remove_dir_all(&temp_dir);
+    Ok(())
 }
 
 struct Store {
@@ -1154,6 +1298,12 @@ fn now_unix() -> Result<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::{Compression, write::GzEncoder};
+    use std::fs;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::thread;
+    use tar::Builder;
 
     #[test]
     fn encryption_round_trips_alias_payload() {
@@ -1202,5 +1352,75 @@ mod tests {
 
         assert!(!json.contains("recovery_phrase"));
         assert!(!json.contains("abandon"));
+    }
+
+    fn release_archive_bytes(contents: &[u8]) -> Vec<u8> {
+        let encoder = GzEncoder::new(Vec::new(), Compression::default());
+        let mut builder = Builder::new(encoder);
+
+        let mut header = tar::Header::new_gnu();
+        header.set_path("aliaz").unwrap();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder.append_data(&mut header, "aliaz", contents).unwrap();
+        let encoder = builder.into_inner().unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn spawn_release_server(
+        checksums: Vec<u8>,
+        archive: Vec<u8>,
+        archive_path: String,
+    ) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let handle = thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                reader.read_line(&mut request_line).unwrap();
+                let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+
+                let (status, body, content_type) = if path == "/checksums.txt" {
+                    ("200 OK", checksums.clone(), "text/plain")
+                } else if path == archive_path {
+                    ("200 OK", archive.clone(), "application/gzip")
+                } else {
+                    ("404 Not Found", b"not found".to_vec(), "text/plain")
+                };
+
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+            }
+        });
+
+        (base_url, handle)
+    }
+
+    #[test]
+    fn update_release_binary_downloads_and_installs_the_latest_release() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let destination = temp.path().join("aliaz");
+        fs::write(&destination, b"old-binary").unwrap();
+
+        let target = release_target().unwrap();
+        let archive_name = format!("aliaz-{target}.tar.gz");
+        let archive = release_archive_bytes(b"new-binary");
+        let checksum = format!("{:x}", Sha256::digest(&archive));
+        let checksums = format!("{checksum}  {archive_name}\n").into_bytes();
+        let (base_url, handle) =
+            spawn_release_server(checksums, archive, format!("/{archive_name}"));
+
+        update_release_binary_from_base_url(&destination, &base_url).unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(fs::read(&destination).unwrap(), b"new-binary");
     }
 }
