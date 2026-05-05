@@ -36,6 +36,64 @@ ask() {
   printf '%s\n' "$answer"
 }
 
+pick_choice() {
+  index="$1"
+  shift
+
+  i=1
+  for option in "$@"; do
+    if [ "$i" = "$index" ]; then
+      printf '%s\n' "$option"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+
+  return 1
+}
+
+menu_choice() {
+  prompt="$1"
+  default="$2"
+  shift 2
+
+  say "$prompt"
+  i=1
+  for option in "$@"; do
+    say "  $i) $option"
+    i=$((i + 1))
+  done
+
+  while :; do
+    printf '%s' "aliaz install: choice [$default]: " > /dev/tty
+    IFS= read -r answer < /dev/tty || answer=""
+    if [ -z "$answer" ]; then
+      answer="$default"
+    fi
+
+    case "$answer" in
+      *[!0-9]*)
+        ;;
+      *)
+        choice="$(pick_choice "$answer" "$@")" || choice=""
+        if [ -n "$choice" ]; then
+          printf '%s\n' "$choice"
+          return 0
+        fi
+        ;;
+    esac
+
+    for option in "$@"; do
+      if [ "$answer" = "$option" ]; then
+        printf '%s\n' "$option"
+        return 0
+      fi
+    done
+
+    say "aliaz install: invalid choice"
+  done
+}
+
 download() {
   url="$1"
   output="$2"
@@ -89,7 +147,7 @@ verify_checksum() {
   fi
 }
 
-default_shells() {
+default_shell() {
   case "$(basename "${SHELL:-}")" in
     zsh | bash | fish)
       basename "$SHELL"
@@ -100,13 +158,98 @@ default_shells() {
   esac
 }
 
+shells_from_selection() {
+  selection="$1"
+  resolved=""
+
+  case "$selection" in
+    skip | none | no)
+      printf '%s\n' ""
+      return 0
+      ;;
+    all)
+      printf '%s\n' "zsh bash fish"
+      return 0
+      ;;
+  esac
+
+  for token in $selection; do
+    case "$token" in
+      1 | zsh)
+        choice="zsh"
+        ;;
+      2 | bash)
+        choice="bash"
+        ;;
+      3 | fish)
+        choice="fish"
+        ;;
+      4 | all)
+        printf '%s\n' "zsh bash fish"
+        return 0
+        ;;
+      5 | skip | none | no)
+        printf '%s\n' ""
+        return 0
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+
+    if [ -z "$resolved" ]; then
+      resolved="$choice"
+    else
+      case " $resolved " in
+        *" $choice "*) continue ;;
+      esac
+      resolved="$resolved $choice"
+    fi
+  done
+
+  printf '%s\n' "$resolved"
+}
+
 configure_shells() {
   shells="${ALIAZ_INSTALL_SHELLS:-}"
 
   if [ -z "$shells" ]; then
     if has_tty; then
-      default="$(default_shells)"
-      shells="$(ask "aliaz install: configure shells [${default}; zsh bash fish, skip]: " "$default")"
+      current_shell="$(default_shell)"
+      default_choice=1
+      case "$current_shell" in
+        zsh)
+          default_choice=1
+          ;;
+        bash)
+          default_choice=2
+          ;;
+        fish)
+          default_choice=3
+          ;;
+      esac
+      say "aliaz install: choose shell integration"
+      say "  1) zsh"
+      say "  2) bash"
+      say "  3) fish"
+      say "  4) all"
+      say "  5) skip"
+      say "  Press Enter for your current shell ($current_shell)"
+
+      while :; do
+        printf '%s' "aliaz install: choice [$default_choice]: " > /dev/tty
+        IFS= read -r answer < /dev/tty || answer=""
+        if [ -z "$answer" ]; then
+          answer="$default_choice"
+        fi
+
+        shells="$(shells_from_selection "$answer")" || shells=""
+        if [ -n "$shells" ] || [ "$answer" = "5" ] || [ "$answer" = "skip" ] || [ "$answer" = "none" ] || [ "$answer" = "no" ]; then
+          break
+        fi
+
+        say "aliaz install: invalid choice"
+      done
     else
       say "aliaz install: shell integration skipped; set ALIAZ_INSTALL_SHELLS to configure non-interactively"
       return 0
@@ -144,15 +287,7 @@ setup_sync() {
       return 0
     fi
 
-    sync_answer="$(ask "aliaz install: set up encrypted sync now? [y/N]: " "n")"
-    case "$sync_answer" in
-      y | Y | yes | YES)
-        mode="$(ask "aliaz install: sync command [login/register]: " "login")"
-        ;;
-      *)
-        return 0
-        ;;
-    esac
+    mode="$(menu_choice "aliaz install: set up encrypted sync" 1 skip register login)"
   fi
 
   case "$mode" in

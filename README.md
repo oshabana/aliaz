@@ -60,8 +60,9 @@ curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | sh
 
 The installer downloads the matching release binary for your platform and
 installs it to `~/.local/bin`. During interactive installs, it can configure
-zsh, bash, fish, or multiple shells. For zsh and bash, it updates the startup
-file once; for fish, it writes the managed `conf.d` file.
+zsh, bash, fish, or multiple shells through numbered menus. Sync setup also
+uses a menu instead of typed `login` / `register` prompts. For zsh and bash, it
+updates the startup file once; for fish, it writes the managed `conf.d` file.
 
 Configure shells non-interactively:
 
@@ -98,6 +99,15 @@ The installer can also start sync setup:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SYNC=login ALIAZ_SYNC_USERNAME=ada sh
 ```
+
+Keep an installed binary current:
+
+```sh
+aliaz update
+```
+
+`update` downloads the latest release for the current platform and replaces the
+installed binary in place.
 
 To build from source, install Rust first if `cargo` is not already available:
 
@@ -299,6 +309,12 @@ Run sync:
 
 ```sh
 aliaz sync
+```
+
+Print the stored recovery phrase for the signed-in sync account:
+
+```sh
+aliaz key
 ```
 
 Log out of local sync state:

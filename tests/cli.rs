@@ -210,6 +210,34 @@ fn logout_removes_local_sync_config_and_recovery_phrase() {
 }
 
 #[test]
+fn key_prints_the_stored_recovery_phrase() {
+    let home = TempDir::new().expect("temp home");
+    let config_dir = home.path().join(".config/aliaz");
+    let secret_dir = home.path().join(".secrets");
+    fs::create_dir_all(&config_dir).expect("config dir");
+    fs::create_dir_all(&secret_dir).expect("secret dir");
+    fs::write(
+        config_dir.join("config.json"),
+        r#"{
+  "sync_url": "https://sync.example",
+  "username": "ada",
+  "user_id": "user-1",
+  "token": "token-1",
+  "latest_version": 7
+}
+"#,
+    )
+    .expect("config");
+    fs::write(secret_dir.join("user-1"), "recovery phrase").expect("secret");
+
+    cmd(&home)
+        .args(["key"])
+        .assert()
+        .success()
+        .stdout(predicate::eq("recovery phrase\n"));
+}
+
+#[test]
 fn migrate_imports_aliases_from_zshrc_style_file() {
     let home = TempDir::new().expect("temp home");
     let zshrc = home.path().join(".zshrc");
