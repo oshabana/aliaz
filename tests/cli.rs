@@ -92,6 +92,17 @@ fn init_outputs_shell_safe_alias_definitions() {
 }
 
 #[test]
+fn migrate_accepts_help_as_a_nested_command() {
+    let home = TempDir::new().expect("temp home");
+
+    cmd(&home)
+        .args(["migrate", "help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage: aliaz migrate"));
+}
+
+#[test]
 fn init_writes_managed_zsh_alias_file() {
     let home = TempDir::new().expect("temp home");
 

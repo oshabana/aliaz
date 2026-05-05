@@ -1,0 +1,233 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - link "Aliaz home" [ref=e5] [cursor=pointer]:
+        - /url: ../
+        - generic [ref=e7]: Aliaz
+      - navigation "Main navigation" [ref=e8]:
+        - link "Docs" [ref=e9] [cursor=pointer]:
+          - /url: ../docs/
+        - link "Install" [ref=e10] [cursor=pointer]:
+          - /url: ./
+        - link "Commands" [ref=e11] [cursor=pointer]:
+          - /url: ../commands/
+        - link "Sync" [ref=e12] [cursor=pointer]:
+          - /url: ../sync/
+      - generic [ref=e13]:
+        - link "GitHub" [ref=e14] [cursor=pointer]:
+          - /url: https://github.com/oshabana/aliaz
+        - link "Support" [ref=e15] [cursor=pointer]:
+          - /url: https://buymeacoffee.com/aliaz
+        - link "Install" [ref=e16] [cursor=pointer]:
+          - /url: "#installer"
+  - main [ref=e17]:
+    - generic [ref=e18]:
+      - generic [ref=e19]:
+        - generic [ref=e20]: Installation
+        - heading "Install and connect your shell." [level=1] [ref=e22]
+        - paragraph [ref=e23]:
+          - text: The fastest path is the release installer. It downloads the matching binary for your platform and installs it to
+          - code [ref=e24]: ~/.local/bin
+          - text: by default. Interactive installs can also wire Aliaz into zsh, bash, fish, or multiple shells.
+        - generic [ref=e25]:
+          - link "Copy installer" [ref=e26] [cursor=pointer]:
+            - /url: "#installer"
+          - link "Quickstart" [ref=e27] [cursor=pointer]:
+            - /url: ../docs/
+      - complementary [ref=e28]:
+        - list [ref=e29]:
+          - listitem [ref=e30]:
+            - code [ref=e31]: "01"
+            - generic [ref=e32]: No Rust required for release installs.
+          - listitem [ref=e33]:
+            - code [ref=e34]: "02"
+            - generic [ref=e35]: Shell setup can be interactive or scripted.
+          - listitem [ref=e36]:
+            - code [ref=e37]: "03"
+            - generic [ref=e38]: Sync setup can start during install.
+    - generic [ref=e39]:
+      - complementary "Install sections" [ref=e40]:
+        - generic [ref=e41]: Install
+        - link "Release installer" [ref=e42] [cursor=pointer]:
+          - /url: "#installer"
+        - link "Installer options" [ref=e43] [cursor=pointer]:
+          - /url: "#options"
+        - link "From source" [ref=e44] [cursor=pointer]:
+          - /url: "#source"
+        - link "Verify" [ref=e45] [cursor=pointer]:
+          - /url: "#verify"
+      - article [ref=e46]:
+        - generic [ref=e47]:
+          - generic [ref=e48]: Release installer
+          - heading "One command for macOS and Linux." [level=2] [ref=e49]
+          - paragraph [ref=e50]: This is the primary install path from the README. The script chooses the release asset for the current platform and installs the binary. When a terminal is available, it can ask which shells to configure.
+          - generic [ref=e51]:
+            - generic [ref=e52]:
+              - text: $
+              - code [ref=e53]: curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | sh
+              - button "Copy commands" [ref=e54] [cursor=pointer]:
+                - img [ref=e55]
+            - generic [ref=e58]:
+              - text: $
+              - code [ref=e59]: aliaz --help
+              - button "Copy commands" [ref=e60] [cursor=pointer]:
+                - img [ref=e61]
+        - generic [ref=e64]:
+          - generic [ref=e65]: Options
+          - heading "Script shell setup, sync setup, updates, version, or destination." [level=2] [ref=e66]
+          - generic [ref=e67]:
+            - generic [ref=e68]:
+              - heading "Configure shells" [level=3] [ref=e69]
+              - paragraph [ref=e70]:
+                - text: Set
+                - code [ref=e71]: ALIAZ_INSTALL_SHELLS
+                - text: to one or more shell names,
+                - code [ref=e72]: all
+                - text: ", or"
+                - code [ref=e73]: skip
+                - text: . Interactive installs now use numbered menus instead of free-text shell names.
+              - generic [ref=e74]:
+                - generic [ref=e75]:
+                  - text: $
+                  - code [ref=e76]: curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SHELLS="zsh bash" sh
+                  - button "Copy commands" [ref=e77] [cursor=pointer]:
+                    - img [ref=e78]
+                - generic [ref=e81]:
+                  - text: $
+                  - code [ref=e82]: curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SHELLS=skip sh
+                  - button "Copy commands" [ref=e83] [cursor=pointer]:
+                    - img [ref=e84]
+            - generic [ref=e87]:
+              - heading "Start sync setup" [level=3] [ref=e88]
+              - paragraph [ref=e89]:
+                - text: Use
+                - code [ref=e90]: ALIAZ_INSTALL_SYNC
+                - text: with
+                - code [ref=e91]: login
+                - text: ","
+                - code [ref=e92]: register
+                - text: ", or"
+                - code [ref=e93]: skip
+                - text: . Interactive installs use a menu, and non-interactive runs also need
+                - code [ref=e94]: ALIAZ_SYNC_USERNAME
+                - text: .
+              - generic [ref=e96]:
+                - text: $
+                - code [ref=e97]: curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SYNC=login ALIAZ_SYNC_USERNAME=ada sh
+                - button "Copy commands" [ref=e98] [cursor=pointer]:
+                  - img [ref=e99]
+            - generic [ref=e102]:
+              - heading "Update later" [level=3] [ref=e103]
+              - paragraph [ref=e104]:
+                - text: Use
+                - code [ref=e105]: aliaz update
+                - text: to download and install the latest release for the current platform.
+              - generic [ref=e107]:
+                - text: $
+                - code [ref=e108]: aliaz update
+                - button "Copy commands" [ref=e109] [cursor=pointer]:
+                  - img [ref=e110]
+            - generic [ref=e113]:
+              - heading "Install a version" [level=3] [ref=e114]
+              - paragraph [ref=e115]:
+                - text: Set
+                - code [ref=e116]: ALIAZ_VERSION
+                - text: before the shell script.
+              - generic [ref=e118]:
+                - text: $
+                - code [ref=e119]: curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.2 sh
+                - button "Copy commands" [ref=e120] [cursor=pointer]:
+                  - img [ref=e121]
+            - generic [ref=e124]:
+              - heading "Change install dir" [level=3] [ref=e125]
+              - paragraph [ref=e126]:
+                - text: Use
+                - code [ref=e127]: ALIAZ_INSTALL_DIR
+                - text: for another binary path.
+              - generic [ref=e129]:
+                - text: $
+                - code [ref=e130]: curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_DIR=/usr/local/bin sh
+                - button "Copy commands" [ref=e131] [cursor=pointer]:
+                  - img [ref=e132]
+        - generic [ref=e135]:
+          - generic [ref=e136]: Source
+          - heading "Build with Cargo when you want local development." [level=2] [ref=e137]
+          - paragraph [ref=e138]: Install Rust if needed, then install Aliaz from the open-source GitHub repository checkout.
+          - generic [ref=e139]:
+            - generic [ref=e140]:
+              - text: $
+              - code [ref=e141]: cargo install --path .
+              - button "Copy commands" [ref=e142] [cursor=pointer]:
+                - img [ref=e143]
+            - generic [ref=e146]:
+              - text: $
+              - code [ref=e147]: cargo run -- --help
+              - button "Copy commands" [ref=e148] [cursor=pointer]:
+                - img [ref=e149]
+            - generic [ref=e152]:
+              - text: $
+              - code [ref=e153]: cargo run -- add gs "git status"
+              - button "Copy commands" [ref=e154] [cursor=pointer]:
+                - img [ref=e155]
+        - generic [ref=e158]:
+          - generic [ref=e159]: Verify
+          - heading "Confirm the binary is available." [level=2] [ref=e160]
+          - paragraph [ref=e161]:
+            - text: If
+            - code [ref=e162]: aliaz
+            - text: is not found, add the install directory to your
+            - code [ref=e163]: PATH
+            - text: and open a new shell. If you skipped shell setup, run
+            - code [ref=e164]: aliaz init zsh
+            - text: ","
+            - code [ref=e165]: aliaz init bash
+            - text: ", or"
+            - code [ref=e166]: aliaz init fish
+            - text: .
+          - generic [ref=e168]:
+            - text: $
+            - code [ref=e169]: aliaz --help
+            - button "Copy commands" [ref=e170] [cursor=pointer]:
+              - img [ref=e171]
+          - paragraph [ref=e174]:
+            - text: "Output:"
+            - code [ref=e175]: Manage shell aliases from a local SQLite-backed source of truth
+      - complementary "On this page" [ref=e176]:
+        - generic [ref=e177]: On this page
+        - link "Release installer" [ref=e178] [cursor=pointer]:
+          - /url: "#installer"
+        - link "Options" [ref=e179] [cursor=pointer]:
+          - /url: "#options"
+        - link "Source" [ref=e180] [cursor=pointer]:
+          - /url: "#source"
+        - link "Verify" [ref=e181] [cursor=pointer]:
+          - /url: "#verify"
+    - generic [ref=e183]:
+      - 'link "Next: Quickstart Add your first alias and initialize a shell." [ref=e184] [cursor=pointer]':
+        - /url: ../docs/
+        - strong [ref=e185]: "Next: Quickstart"
+        - paragraph [ref=e186]: Add your first alias and initialize a shell.
+      - link "Command reference See every supported command." [ref=e187] [cursor=pointer]:
+        - /url: ../commands/
+        - strong [ref=e188]: Command reference
+        - paragraph [ref=e189]: See every supported command.
+      - link "Sync setup Register, log in, and use a custom sync URL." [ref=e190] [cursor=pointer]:
+        - /url: ../sync/
+        - strong [ref=e191]: Sync setup
+        - paragraph [ref=e192]: Register, log in, and use a custom sync URL.
+  - contentinfo [ref=e193]:
+    - generic [ref=e194]:
+      - link "Aliaz" [ref=e195] [cursor=pointer]:
+        - /url: ../
+        - generic [ref=e197]: Aliaz
+      - generic [ref=e198]:
+        - link "Docs" [ref=e199] [cursor=pointer]:
+          - /url: ../docs/
+        - link "GitHub" [ref=e200] [cursor=pointer]:
+          - /url: https://github.com/oshabana/aliaz
+        - link "Support" [ref=e201] [cursor=pointer]:
+          - /url: https://buymeacoffee.com/aliaz
+        - link "Commands" [ref=e202] [cursor=pointer]:
+          - /url: ../commands/
+        - link "Sync" [ref=e203] [cursor=pointer]:
+          - /url: ../sync/
