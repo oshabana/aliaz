@@ -59,6 +59,7 @@ enum Commands {
         shell: Shell,
     },
     Update,
+    Uninstall,
     Export {
         #[arg(long)]
         output: Option<PathBuf>,
@@ -88,7 +89,10 @@ enum Commands {
     Logout,
     Sync,
     Status,
-    Doctor,
+    Doctor {
+        #[arg(long)]
+        fix: bool,
+    },
 }
 
 #[derive(Clone, ValueEnum)]
@@ -259,6 +263,27 @@ fn main() -> Result<()> {
             )?;
             println!("Updated to latest release");
         }
+        Commands::Uninstall => {
+            let binary_path =
+                std::env::current_exe().context("failed to locate current executable")?;
+            let removed = uninstall_shell_integration()?;
+            let binary_removed = remove_binary_best_effort(&binary_path)?;
+
+            if removed {
+                println!("Removed shell integration");
+            } else {
+                println!("Shell integration was not installed");
+            }
+
+            if binary_removed {
+                println!("Removed {}", binary_path.display());
+            } else {
+                println!("Could not remove {} automatically", binary_path.display());
+                println!("Delete it manually after closing any shell using aliaz");
+            }
+
+            println!("Kept your aliases database and sync settings");
+        }
         Commands::Export { output } => {
             let aliases = store.list()?;
             let export = ExportFile {
@@ -372,7 +397,15 @@ fn main() -> Result<()> {
                 println!("sync: not configured");
             }
         }
-        Commands::Doctor => {
+        Commands::Doctor { fix } => {
+            if fix {
+                let aliases = store.list()?;
+                for shell in shells_to_repair()? {
+                    for message in repair_shell_integration(&shell, &aliases)? {
+                        println!("{message}");
+                    }
+                }
+            }
             println!("database: ok");
             report_integration_status()?;
             if let Some(config) = load_config()? {
@@ -970,6 +1003,189 @@ fn recovery_phrase_available(user_id: &str) -> bool {
     load_recovery_phrase(user_id).is_ok()
 }
 
+fn shell_name(shell: &Shell) -> &'static str {
+    match shell {
+        Shell::Zsh => "zsh",
+        Shell::Bash => "bash",
+        Shell::Fish => "fish",
+    }
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<bool> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
+    }
+}
+
+fn remove_empty_directory(path: &Path) -> Result<()> {
+    match fs::read_dir(path) {
+        Ok(mut entries) => {
+            if entries.next().is_none() {
+                fs::remove_dir(path)
+                    .with_context(|| format!("failed to remove {}", path.display()))?;
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to inspect {}", path.display())),
+    }
+}
+
+fn remove_binary_best_effort(path: &Path) -> Result<bool> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Ok(false),
+    }
+}
+
+fn shell_integration_path(shell: &Shell) -> Result<PathBuf> {
+    Ok(match shell {
+        Shell::Zsh | Shell::Bash => shell_config_home()?.join("aliaz").join("aliases.sh"),
+        Shell::Fish => shell_config_home()?
+            .join("fish")
+            .join("conf.d")
+            .join("aliaz.fish"),
+    })
+}
+
+fn startup_path(shell: &Shell) -> Result<PathBuf> {
+    Ok(match shell {
+        Shell::Zsh => home_dir()?.join(".zshrc"),
+        Shell::Bash => home_dir()?.join(".bashrc"),
+        Shell::Fish => bail!("fish does not use a zsh/bash startup file"),
+    })
+}
+
+fn uninstall_shell_integration() -> Result<bool> {
+    let mut removed_any = false;
+
+    let zsh_path = shell_integration_path(&Shell::Zsh)?;
+    removed_any |= remove_file_if_exists(&zsh_path)?;
+    if let Some(parent) = zsh_path.parent() {
+        remove_empty_directory(parent)?;
+    }
+
+    let fish_path = shell_integration_path(&Shell::Fish)?;
+    removed_any |= remove_file_if_exists(&fish_path)?;
+    if let Some(parent) = fish_path.parent() {
+        remove_empty_directory(parent)?;
+    }
+
+    removed_any |= uninstall_startup_file(&Shell::Zsh)?;
+    removed_any |= uninstall_startup_file(&Shell::Bash)?;
+
+    Ok(removed_any)
+}
+
+fn uninstall_startup_file(shell: &Shell) -> Result<bool> {
+    let startup_path = startup_path(shell)?;
+    let integration_path = shell_integration_path(shell)?;
+    let source_line = sh_source_command(&integration_path)?;
+    let comment = "# Aliaz shell integration";
+
+    let existing = match fs::read_to_string(&startup_path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read {}", startup_path.display()));
+        }
+    };
+
+    if !existing.contains(&source_line) {
+        return Ok(false);
+    }
+
+    let mut lines = existing.lines().peekable();
+    let mut kept = Vec::new();
+    let mut removed = false;
+
+    while let Some(line) = lines.next() {
+        if line == comment {
+            if matches!(lines.peek(), Some(next) if *next == source_line) {
+                lines.next();
+                removed = true;
+                continue;
+            }
+        }
+
+        if line == source_line {
+            removed = true;
+            continue;
+        }
+
+        kept.push(line);
+    }
+
+    if !removed {
+        return Ok(false);
+    }
+
+    if kept.is_empty() {
+        remove_file_if_exists(&startup_path)?;
+        return Ok(true);
+    }
+
+    let mut contents = kept.join("\n");
+    contents.push('\n');
+    fs::write(&startup_path, contents)
+        .with_context(|| format!("failed to write {}", startup_path.display()))?;
+    Ok(true)
+}
+
+fn shell_from_env() -> Option<Shell> {
+    let shell = std::env::var_os("SHELL")?;
+    let shell = Path::new(&shell).file_name()?.to_str()?;
+    match shell {
+        "zsh" => Some(Shell::Zsh),
+        "bash" => Some(Shell::Bash),
+        "fish" => Some(Shell::Fish),
+        _ => None,
+    }
+}
+
+fn shells_to_repair() -> Result<Vec<Shell>> {
+    let mut shells = Vec::new();
+
+    for shell in [Shell::Zsh, Shell::Bash, Shell::Fish] {
+        let integration_path = shell_integration_path(&shell)?;
+        let startup_exists = match shell {
+            Shell::Zsh | Shell::Bash => startup_path(&shell)?.exists(),
+            Shell::Fish => false,
+        };
+
+        if integration_path.exists() || startup_exists {
+            shells.push(shell);
+        }
+    }
+
+    if shells.is_empty() {
+        shells.push(shell_from_env().unwrap_or(Shell::Zsh));
+    }
+
+    Ok(shells)
+}
+
+fn repair_shell_integration(shell: &Shell, aliases: &[Alias]) -> Result<Vec<String>> {
+    let mut messages = Vec::new();
+    let path = write_shell_integration(shell, aliases)?;
+    messages.push(format!(
+        "repaired {} integration at {}",
+        shell_name(shell),
+        path.display()
+    ));
+
+    if matches!(shell, Shell::Zsh | Shell::Bash) {
+        let startup_path = configure_startup_file(shell, &path)?;
+        messages.push(format!("configured {}", startup_path.display()));
+    }
+
+    Ok(messages)
+}
+
 fn test_secret_home() -> Option<PathBuf> {
     std::env::var_os("ALIAZ_TEST_SECRET_HOME").map(PathBuf::from)
 }
@@ -988,13 +1204,7 @@ fn secret_file_name(user_id: &str) -> String {
 }
 
 fn write_shell_integration(shell: &Shell, aliases: &[Alias]) -> Result<PathBuf> {
-    let path = match shell {
-        Shell::Zsh | Shell::Bash => shell_config_home()?.join("aliaz").join("aliases.sh"),
-        Shell::Fish => shell_config_home()?
-            .join("fish")
-            .join("conf.d")
-            .join("aliaz.fish"),
-    };
+    let path = shell_integration_path(shell)?;
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -1092,11 +1302,7 @@ fn fish_wrapper_lines(binary: &str, path: &PathBuf) -> Vec<String> {
 }
 
 fn configure_startup_file(shell: &Shell, integration_path: &PathBuf) -> Result<PathBuf> {
-    let startup_path = match shell {
-        Shell::Zsh => home_dir()?.join(".zshrc"),
-        Shell::Bash => home_dir()?.join(".bashrc"),
-        Shell::Fish => bail!("fish does not use a zsh/bash startup file"),
-    };
+    let startup_path = startup_path(shell)?;
     let source_line = sh_source_command(integration_path)?;
     let comment = "# Aliaz shell integration";
     let existing = match fs::read_to_string(&startup_path) {
