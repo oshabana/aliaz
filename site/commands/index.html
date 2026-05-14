@@ -53,9 +53,9 @@
             </div>
             <h1>Small verbs, predictable output.</h1>
             <p class="lead">
-              Aliaz keeps the open-source command surface compact: local alias
-              CRUD, shell output, migration, JSON portability, optional sync,
-              logout, and health checks.
+              Aliaz keeps the open-source command surface compact: alias CRUD,
+              collections, shell output, migration, JSON portability, optional
+              sync, logout, and health checks.
             </p>
             <div class="actions">
               <a class="btn primary" href="#local">Local commands</a>
@@ -104,16 +104,28 @@
                   <span>local store</span>
                 </div>
                 <pre><code><span class="prompt">$</span> aliaz add gs "git status"
-<span class="ok">Added gs</span>
+<span class="ok">Added gs to shared</span>
 
-<span class="prompt">$</span> aliaz list
-<span class="dim">gs	git status</span>
+<span class="prompt">$</span> aliaz collection add mac
+<span class="ok">Created collection mac</span>
+
+<span class="prompt">$</span> aliaz add pbcopy-path "pwd | pbcopy" --collection mac
+<span class="ok">Added pbcopy-path to mac</span>
+
+<span class="prompt">$</span> aliaz collection activate mac
+<span class="ok">Activated mac</span>
+
+<span class="prompt">$</span> aliaz list --all
+<span class="dim">gs	git status	shared	active
+pbcopy-path	pwd | pbcopy	mac	active</span>
+
+<span class="prompt">$</span> aliaz select git
 
 <span class="prompt">$</span> aliaz edit gs "git status --short"
-<span class="ok">Updated gs</span>
+<span class="ok">Updated gs in shared</span>
 
 <span class="prompt">$</span> aliaz rm gs
-<span class="ok">Deleted gs</span></code></pre>
+<span class="ok">Deleted gs from shared</span></code></pre>
               </div>
             </section>
 
@@ -141,7 +153,8 @@
                 For zsh and bash, <code>init</code> also updates the startup
                 file once. The managed integration refreshes aliases after
                 successful <code>add</code>, <code>edit</code>, <code>rm</code>,
-                <code>migrate</code>, <code>import</code>, and
+                <code>collection</code>, <code>migrate</code>,
+                <code>import</code>, and
                 <code>sync</code> commands.
               </p>
             </section>
@@ -180,27 +193,93 @@
                   </thead>
                   <tbody>
                     <tr>
-                      <td><code>add &lt;name&gt; &lt;command&gt;</code></td>
+                      <td>
+                        <code
+                          >add &lt;name&gt; &lt;command&gt; [--collection
+                          &lt;collection&gt;]</code
+                        >
+                      </td>
                       <td>Create or update an alias.</td>
                       <td>
                         Names allow ASCII letters, numbers, <code>_</code>,
-                        <code>-</code>, and <code>.</code>.
+                        <code>-</code>, and <code>.</code>. Defaults to
+                        <code>shared</code>.
                       </td>
                     </tr>
                     <tr>
-                      <td><code>list</code></td>
-                      <td>Print active aliases.</td>
-                      <td>Output is tab-separated.</td>
+                      <td>
+                        <code
+                          >list [--all] [--collection
+                          &lt;collection&gt;]</code
+                        >
+                      </td>
+                      <td>Print effective aliases.</td>
+                      <td>
+                        Default output is <code>name</code> and
+                        <code>command</code>. <code>--all</code> includes
+                        collection and active state.
+                      </td>
                     </tr>
                     <tr>
-                      <td><code>edit &lt;name&gt; &lt;command&gt;</code></td>
+                      <td><code>select [search text]</code></td>
+                      <td>Search aliases and run one.</td>
+                      <td>
+                        Opens an interactive list of effective aliases. Press
+                        Enter to run the selected command.
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <code
+                          >edit &lt;name&gt; &lt;command&gt; [--collection
+                          &lt;collection&gt;]</code
+                        >
+                      </td>
                       <td>Update an alias command.</td>
-                      <td>Fails if the alias does not exist.</td>
+                      <td>
+                        Pass <code>--collection</code> when a name exists in
+                        multiple collections.
+                      </td>
                     </tr>
                     <tr>
-                      <td><code>rm &lt;name&gt;</code></td>
+                      <td>
+                        <code
+                          >rm &lt;name&gt; [--collection
+                          &lt;collection&gt;]</code
+                        >
+                      </td>
                       <td>Delete an alias.</td>
                       <td><code>delete</code> is accepted as an alias.</td>
+                    </tr>
+                    <tr>
+                      <td><code>collection add &lt;name&gt;</code></td>
+                      <td>Create a synced collection.</td>
+                      <td>Collections are inactive until activated locally.</td>
+                    </tr>
+                    <tr>
+                      <td><code>collection list</code></td>
+                      <td>List collections.</td>
+                      <td>Shows active or inactive state for this computer.</td>
+                    </tr>
+                    <tr>
+                      <td><code>collection activate &lt;name&gt;...</code></td>
+                      <td>Activate collections on this computer.</td>
+                      <td>Later active collections override earlier ones.</td>
+                    </tr>
+                    <tr>
+                      <td><code>collection deactivate &lt;name&gt;</code></td>
+                      <td>Deactivate a collection locally.</td>
+                      <td><code>shared</code> cannot be deactivated.</td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <code
+                          >collection move &lt;alias&gt; --from
+                          &lt;collection&gt; --to &lt;collection&gt;</code
+                        >
+                      </td>
+                      <td>Move an alias between collections.</td>
+                      <td>Preserves the alias record and marks it for sync.</td>
                     </tr>
                     <tr>
                       <td><code>migrate --from &lt;path&gt;</code></td>
@@ -225,7 +304,7 @@
                     <tr>
                       <td><code>import &lt;path&gt;</code></td>
                       <td>Import exported JSON.</td>
-                      <td>Upserts by alias name.</td>
+                      <td>Version 2 exports preserve collections.</td>
                     </tr>
                     <tr>
                       <td><code>update</code></td>

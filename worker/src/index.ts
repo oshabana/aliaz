@@ -233,7 +233,7 @@ function validateUploadRecord(record: UploadRecord): {
   if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(record.id)) {
     throw new HttpError(400, "invalid_record_id");
   }
-  if (record.record_type !== "alias") {
+  if (!["alias", "collection"].includes(record.record_type)) {
     throw new HttpError(400, "invalid_record_type");
   }
   if (record.encrypted_blob.length < 32 || record.encrypted_blob.length > 64_000) {
