@@ -74,6 +74,266 @@ fn add_list_edit_and_delete_aliases() {
 }
 
 #[test]
+fn aliases_default_to_shared_collection() {
+    let home = TempDir::new().expect("temp home");
+
+    cmd(&home)
+        .args(["add", "gs", "git status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added gs to shared"));
+
+    cmd(&home)
+        .args(["collection", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("shared\tactive"));
+
+    cmd(&home)
+        .args(["list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("gs\tgit status"));
+
+    cmd(&home)
+        .args(["list", "--all"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("gs\tgit status\tshared\tactive"));
+}
+
+#[test]
+fn existing_database_aliases_migrate_into_shared_collection() {
+    let home = TempDir::new().expect("temp home");
+
+    cmd(&home).args(["add", "ll", "ls -lah"]).assert().success();
+
+    cmd(&home)
+        .args(["list", "--all"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ll\tls -lah\tshared\tactive"));
+}
+
+#[test]
+fn inactive_collections_do_not_generate_until_activated() {
+    let home = TempDir::new().expect("temp home");
+
+    cmd(&home)
+        .args(["collection", "add", "mac"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created collection mac"));
+
+    cmd(&home)
+        .args(["add", "pbcopy-path", "pwd | pbcopy", "--collection", "mac"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added pbcopy-path to mac"));
+
+    cmd(&home)
+        .args(["generate", "zsh"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    cmd(&home)
+        .args(["collection", "activate", "mac"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Activated mac"));
+
+    cmd(&home)
+        .args(["generate", "zsh"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("alias pbcopy-path='pwd | pbcopy'"));
+}
+
+#[test]
+fn active_collection_aliases_override_shared_aliases() {
+    let home = TempDir::new().expect("temp home");
+
+    cmd(&home)
+        .args(["add", "lsdash", "ls --color=auto"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["collection", "add", "mac"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["add", "lsdash", "ls -G", "--collection", "mac"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["collection", "activate", "mac"])
+        .assert()
+        .success();
+
+    cmd(&home)
+        .args(["generate", "zsh"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("alias lsdash='ls -G'"))
+        .stdout(predicate::str::contains("ls --color=auto").not());
+}
+
+#[test]
+fn edit_remove_and_move_accept_collection_scope() {
+    let home = TempDir::new().expect("temp home");
+
+    cmd(&home)
+        .args(["collection", "add", "dev"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args([
+            "add",
+            "serve",
+            "python -m http.server",
+            "--collection",
+            "dev",
+        ])
+        .assert()
+        .success();
+
+    cmd(&home)
+        .args([
+            "edit",
+            "serve",
+            "python3 -m http.server",
+            "--collection",
+            "dev",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Updated serve in dev"));
+
+    cmd(&home)
+        .args([
+            "collection",
+            "move",
+            "serve",
+            "--from",
+            "dev",
+            "--to",
+            "shared",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Moved serve from dev to shared"));
+
+    cmd(&home)
+        .args(["list", "--all"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "serve\tpython3 -m http.server\tshared\tactive",
+        ));
+
+    cmd(&home)
+        .args(["rm", "serve", "--collection", "shared"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Deleted serve from shared"));
+}
+
+#[test]
+fn edit_requires_collection_when_alias_name_is_ambiguous() {
+    let home = TempDir::new().expect("temp home");
+
+    cmd(&home)
+        .args(["collection", "add", "mac"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["add", "openit", "xdg-open"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["add", "openit", "open", "--collection", "mac"])
+        .assert()
+        .success();
+
+    cmd(&home)
+        .args(["edit", "openit", "open -a Finder"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "alias is ambiguous; pass --collection",
+        ));
+}
+
+#[test]
+fn select_prints_matching_alias_command_for_shell_wrapper() {
+    let home = TempDir::new().expect("temp home");
+
+    cmd(&home)
+        .args(["add", "gs", "git status"])
+        .assert()
+        .success();
+    cmd(&home).args(["add", "ll", "ls -lah"]).assert().success();
+
+    cmd(&home)
+        .args(["select", "--print-command", "--first", "ll"])
+        .assert()
+        .success()
+        .stdout(predicate::eq("ls -lah\n"));
+}
+
+#[test]
+fn select_runs_matching_alias_command_without_shell_wrapper() {
+    let home = TempDir::new().expect("temp home");
+
+    cmd(&home)
+        .args(["add", "hi", "printf selected-ok"])
+        .assert()
+        .success();
+
+    cmd(&home)
+        .env("SHELL", "/bin/bash")
+        .args(["select", "--first", "hi"])
+        .assert()
+        .success()
+        .stdout(predicate::eq("selected-ok"));
+}
+
+#[test]
+fn bash_wrapper_executes_selected_alias_in_current_shell() {
+    let home = TempDir::new().expect("temp home");
+    let bin = assert_cmd::cargo::cargo_bin("aliaz");
+    let bin_dir = bin.parent().expect("binary parent");
+
+    let output = ProcessCommand::new("bash")
+        .arg("-lc")
+        .arg(
+            r#"
+            shopt -s expand_aliases
+            aliaz init bash >/dev/null
+            source "$HOME/.config/aliaz/aliases.sh"
+            aliaz add hi "printf wrapper-ok" >/dev/null
+            aliaz select --first hi
+            "#,
+        )
+        .env("HOME", home.path())
+        .env("ALIAS_TOOL_HOME", home.path())
+        .env("ALIAZ_CONFIG_HOME", home.path().join(".config"))
+        .env("ALIAZ_TEST_SECRET_HOME", home.path().join(".secrets"))
+        .env("PATH", format!("{}:/usr/bin:/bin", bin_dir.display()))
+        .output()
+        .expect("run bash");
+
+    assert!(
+        output.status.success(),
+        "bash failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "wrapper-ok");
+}
+
+#[test]
 fn init_outputs_shell_safe_alias_definitions() {
     let home = TempDir::new().expect("temp home");
 
@@ -404,6 +664,49 @@ fn export_and_import_round_trip_aliases() {
 }
 
 #[test]
+fn export_and_import_preserve_collections() {
+    let source = TempDir::new().expect("temp home");
+    let export_path = source.path().join("aliases.json");
+
+    cmd(&source)
+        .args(["collection", "add", "dev"])
+        .assert()
+        .success();
+    cmd(&source)
+        .args([
+            "add",
+            "serve",
+            "python3 -m http.server",
+            "--collection",
+            "dev",
+        ])
+        .assert()
+        .success();
+    cmd(&source)
+        .args([
+            "export",
+            "--output",
+            export_path.to_str().expect("utf8 path"),
+        ])
+        .assert()
+        .success();
+
+    let target = TempDir::new().expect("temp home");
+    cmd(&target)
+        .args(["import", export_path.to_str().expect("utf8 path")])
+        .assert()
+        .success();
+
+    cmd(&target)
+        .args(["list", "--all"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "serve\tpython3 -m http.server\tdev\tinactive",
+        ));
+}
+
+#[test]
 fn status_and_doctor_report_local_state() {
     let home = TempDir::new().expect("temp home");
 
@@ -418,6 +721,8 @@ fn status_and_doctor_report_local_state() {
         .assert()
         .success()
         .stdout(predicate::str::contains("aliases: 1"))
+        .stdout(predicate::str::contains("collections: 1"))
+        .stdout(predicate::str::contains("active collections: shared"))
         .stdout(predicate::str::contains("pending sync records: 1"))
         .stdout(predicate::str::contains("sync: not configured"));
 

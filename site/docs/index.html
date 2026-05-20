@@ -100,7 +100,7 @@
                   <span>quickstart</span>
                 </div>
                 <pre><code><span class="prompt">$</span> aliaz add gs "git status"
-<span class="ok">Added gs</span>
+<span class="ok">Added gs to shared</span>
 
 <span class="prompt">$</span> aliaz list
 <span class="dim">gs	git status</span>
@@ -136,6 +136,11 @@
 <span class="prompt">$</span> aliaz init fish</code></pre>
                 </div>
               </div>
+              <p>
+                After integration is active, <code>aliaz select</code> opens a
+                searchable alias list and runs the selected command in the
+                current shell.
+              </p>
             </section>
 
             <section id="migrate">
@@ -165,6 +170,13 @@
                 server stores encrypted records and metadata, while the recovery
                 phrase stays local and is required to decrypt aliases on a new
                 computer.
+              </p>
+              <p>
+                Collections sync across machines, while each computer chooses
+                which collections are active locally. The
+                <code>shared</code> collection is always active, so aliases
+                added without <code>--collection</code> continue to work
+                everywhere.
               </p>
               <div class="grid-2">
                 <div class="panel">
@@ -208,7 +220,8 @@
                 If an alias does not appear in your shell, list aliases, rerun
                 init for your shell, then use doctor. Once integration is
                 loaded, <code>add</code>, <code>edit</code>, <code>rm</code>,
-                <code>migrate</code>, <code>import</code>, and
+                <code>collection</code>, <code>migrate</code>,
+                <code>import</code>, and
                 <code>sync</code> refresh aliases automatically.
               </p>
               <div class="terminal">

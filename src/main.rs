@@ -6,17 +6,18 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit},
 };
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 use flate2::read::GzDecoder;
 use hkdf::Hkdf;
 use keyring::Entry;
 use rand::RngCore;
 use reqwest::blocking::Client;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
-use std::io::Cursor;
+use std::io::{self, Cursor, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tar::Archive;
@@ -24,6 +25,8 @@ use uuid::Uuid;
 
 const DEFAULT_SYNC_URL: &str = "https://aliaz-sync.still-silence-6a39.workers.dev";
 const KEYRING_SERVICE: &str = "dev.aliaz.cli";
+const DEFAULT_COLLECTION_NAME: &str = "shared";
+const DEFAULT_COLLECTION_ID: &str = "collection:shared";
 
 #[derive(Parser)]
 #[command(name = "aliaz")]
@@ -38,15 +41,41 @@ enum Commands {
     Add {
         name: String,
         command: String,
+        #[arg(long, default_value = DEFAULT_COLLECTION_NAME)]
+        collection: String,
     },
-    List,
+    List {
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        collection: Option<String>,
+    },
+    /// Pick an alias from a searchable list and run it.
+    Select {
+        /// Print the selected command instead of running it.
+        #[arg(long, hide = true)]
+        print_command: bool,
+        /// Pick the first matching alias without opening the interactive list.
+        #[arg(long, hide = true)]
+        first: bool,
+        /// Initial search text.
+        query: Vec<String>,
+    },
     #[command(alias = "delete")]
     Rm {
         name: String,
+        #[arg(long)]
+        collection: Option<String>,
     },
     Edit {
         name: String,
         command: String,
+        #[arg(long)]
+        collection: Option<String>,
+    },
+    Collection {
+        #[command(subcommand)]
+        command: CollectionCommand,
     },
     Migrate {
         #[arg(long)]
@@ -72,6 +101,8 @@ enum Commands {
         username: String,
         #[arg(long)]
         password: Option<String>,
+        #[arg(long)]
+        collections: Option<String>,
         #[arg(long, default_value = DEFAULT_SYNC_URL)]
         sync_url: String,
     },
@@ -82,6 +113,8 @@ enum Commands {
         password: Option<String>,
         #[arg(long)]
         recovery_phrase: Option<String>,
+        #[arg(long)]
+        collections: Option<String>,
         #[arg(long, default_value = DEFAULT_SYNC_URL)]
         sync_url: String,
     },
@@ -95,6 +128,27 @@ enum Commands {
     },
 }
 
+#[derive(Subcommand)]
+enum CollectionCommand {
+    Add {
+        name: String,
+    },
+    List,
+    Activate {
+        names: Vec<String>,
+    },
+    Deactivate {
+        name: String,
+    },
+    Move {
+        alias: String,
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        to: String,
+    },
+}
+
 #[derive(Clone, ValueEnum)]
 enum Shell {
     Zsh,
@@ -105,6 +159,8 @@ enum Shell {
 #[derive(Debug, PartialEq, Eq)]
 struct Alias {
     id: String,
+    collection_id: String,
+    collection_name: String,
     name: String,
     command: String,
     deleted: bool,
@@ -113,16 +169,37 @@ struct Alias {
     updated_at: i64,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct Collection {
+    id: String,
+    name: String,
+    deleted: bool,
+    dirty: bool,
+    sync_version: i64,
+    updated_at: i64,
+    active: bool,
+    priority: i64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ExportFile {
     version: u8,
+    #[serde(default)]
+    collections: Vec<ExportCollection>,
     aliases: Vec<ExportAlias>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ExportCollection {
+    name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ExportAlias {
     name: String,
     command: String,
+    #[serde(default = "default_collection_name")]
+    collection: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -159,10 +236,29 @@ struct AccountResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AliasPayload {
+    #[serde(default = "default_collection_id")]
+    collection_id: String,
+    #[serde(default = "default_collection_name")]
+    collection_name: String,
     name: String,
     command: String,
     deleted: bool,
     updated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CollectionPayload {
+    name: String,
+    deleted: bool,
+    updated_at: i64,
+}
+
+fn default_collection_id() -> String {
+    DEFAULT_COLLECTION_ID.to_owned()
+}
+
+fn default_collection_name() -> String {
+    DEFAULT_COLLECTION_NAME.to_owned()
 }
 
 #[derive(Debug, Deserialize)]
@@ -214,23 +310,102 @@ fn main() -> Result<()> {
     let store = Store::open(db_path)?;
 
     match cli.command {
-        Commands::Add { name, command } => {
-            store.upsert(&name, &command)?;
-            println!("Added {name}");
+        Commands::Add {
+            name,
+            command,
+            collection,
+        } => {
+            store.upsert_in_collection(&collection, &name, &command)?;
+            println!("Added {name} to {collection}");
         }
-        Commands::List => {
-            for alias in store.list()? {
-                println!("{}\t{}", alias.name, alias.command);
+        Commands::List { all, collection } => {
+            if all {
+                let active_collections = store
+                    .collections()?
+                    .into_iter()
+                    .filter(|collection| collection.active)
+                    .map(|collection| collection.name)
+                    .collect::<HashSet<_>>();
+                for alias in store.list_all(collection.as_deref())? {
+                    let status = if active_collections.contains(&alias.collection_name) {
+                        "active"
+                    } else {
+                        "inactive"
+                    };
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        alias.name, alias.command, alias.collection_name, status
+                    );
+                }
+            } else if let Some(collection) = collection {
+                for alias in store.list_all(Some(&collection))? {
+                    println!("{}\t{}", alias.name, alias.command);
+                }
+            } else {
+                for alias in store.list_effective()? {
+                    println!("{}\t{}", alias.name, alias.command);
+                }
             }
         }
-        Commands::Rm { name } => {
-            store.delete(&name)?;
-            println!("Deleted {name}");
+        Commands::Select {
+            print_command,
+            first,
+            query,
+        } => {
+            select_alias(&store, &query, print_command, first)?;
         }
-        Commands::Edit { name, command } => {
-            store.update(&name, &command)?;
-            println!("Updated {name}");
+        Commands::Rm { name, collection } => {
+            let collection_name = store.delete_alias(collection.as_deref(), &name)?;
+            println!("Deleted {name} from {collection_name}");
         }
+        Commands::Edit {
+            name,
+            command,
+            collection,
+        } => {
+            let collection_name = store.update_alias(collection.as_deref(), &name, &command)?;
+            println!("Updated {name} in {collection_name}");
+        }
+        Commands::Collection { command } => match command {
+            CollectionCommand::Add { name } => {
+                store.create_collection(&name)?;
+                println!("Created collection {name}");
+            }
+            CollectionCommand::List => {
+                for collection in store.collections()? {
+                    let status = if collection.active {
+                        "active"
+                    } else {
+                        "inactive"
+                    };
+                    println!("{}\t{}", collection.name, status);
+                }
+            }
+            CollectionCommand::Activate { names } => {
+                if names.is_empty() {
+                    bail!("at least one collection name is required");
+                }
+                let activated = store.activate_collections(&names)?;
+                if activated.is_empty() {
+                    println!("No collections changed");
+                } else {
+                    for name in activated {
+                        println!("Activated {name}");
+                    }
+                }
+            }
+            CollectionCommand::Deactivate { name } => {
+                if store.deactivate_collection(&name)? {
+                    println!("Deactivated {name}");
+                } else {
+                    println!("{name} is already inactive");
+                }
+            }
+            CollectionCommand::Move { alias, from, to } => {
+                store.move_alias(&alias, &from, &to)?;
+                println!("Moved {alias} from {from} to {to}");
+            }
+        },
         Commands::Migrate { from } => {
             let path = from.unwrap_or_else(default_zshrc_path);
             let contents = fs::read_to_string(&path)
@@ -238,12 +413,12 @@ fn main() -> Result<()> {
             let aliases = parse_aliases(&contents)?;
             let count = aliases.len();
             for alias in aliases {
-                store.upsert(&alias.name, &alias.command)?;
+                store.upsert_in_collection(DEFAULT_COLLECTION_NAME, &alias.name, &alias.command)?;
             }
             println!("Imported {count} aliases");
         }
         Commands::Init { shell } => {
-            let aliases = store.list()?;
+            let aliases = store.list_effective()?;
             let path = write_shell_integration(&shell, &aliases)?;
             match shell {
                 Shell::Zsh | Shell::Bash => {
@@ -257,7 +432,7 @@ fn main() -> Result<()> {
             }
         }
         Commands::Generate { shell } => {
-            for line in shell_alias_lines(&shell, &store.list()?) {
+            for line in shell_alias_lines(&shell, &store.list_effective()?) {
                 println!("{line}");
             }
         }
@@ -289,14 +464,22 @@ fn main() -> Result<()> {
             println!("Kept your aliases database and sync settings");
         }
         Commands::Export { output } => {
-            let aliases = store.list()?;
+            let aliases = store.list_all(None)?;
+            let collections = store.collections()?;
             let export = ExportFile {
-                version: 1,
+                version: 2,
+                collections: collections
+                    .iter()
+                    .map(|collection| ExportCollection {
+                        name: collection.name.clone(),
+                    })
+                    .collect(),
                 aliases: aliases
                     .iter()
                     .map(|alias| ExportAlias {
                         name: alias.name.clone(),
                         command: alias.command.clone(),
+                        collection: alias.collection_name.clone(),
                     })
                     .collect(),
             };
@@ -315,18 +498,24 @@ fn main() -> Result<()> {
                 .with_context(|| format!("failed to read {}", path.display()))?;
             let export: ExportFile = serde_json::from_str(&contents)
                 .with_context(|| format!("failed to parse {}", path.display()))?;
-            if export.version != 1 {
+            if !matches!(export.version, 1 | 2) {
                 bail!("unsupported export version: {}", export.version);
+            }
+            if export.version >= 2 {
+                for collection in &export.collections {
+                    store.create_collection(&collection.name)?;
+                }
             }
             let count = export.aliases.len();
             for alias in export.aliases {
-                store.upsert(&alias.name, &alias.command)?;
+                store.upsert_in_collection(&alias.collection, &alias.name, &alias.command)?;
             }
             println!("Imported {count} aliases");
         }
         Commands::Register {
             username,
             password,
+            collections,
             sync_url,
         } => {
             let password = prompt_secret_if_missing(password, "Password: ")?;
@@ -340,6 +529,8 @@ fn main() -> Result<()> {
                 token: response.token,
                 latest_version: response.latest_version,
             })?;
+            let collections = parse_collection_csv(collections.as_deref())?;
+            create_and_activate_collections(&store, &collections)?;
             println!("Registered {username}");
             println!("Recovery phrase: {phrase}");
             println!(
@@ -350,6 +541,7 @@ fn main() -> Result<()> {
             username,
             password,
             recovery_phrase,
+            collections,
             sync_url,
         } => {
             let password = prompt_secret_if_missing(password, "Password: ")?;
@@ -358,7 +550,14 @@ fn main() -> Result<()> {
                 .context("invalid recovery phrase")?;
             let response = account_request(&sync_url, "login", &username, &password)?;
             store_recovery_phrase(&response.user_id, &recovery_phrase)?;
-            save_config(&login_config(&sync_url, &username, response))?;
+            let mut config = login_config(&sync_url, &username, response);
+            let _ = sync_aliases(&store, &mut config, &recovery_phrase)?;
+            save_config(&config)?;
+            let collections = match collections {
+                Some(value) => parse_collection_csv(Some(&value))?,
+                None => prompt_for_collection_selection(&store)?,
+            };
+            store.activate_collections(&collections)?;
             println!("Logged in {username}");
         }
         Commands::Key => {
@@ -392,6 +591,11 @@ fn main() -> Result<()> {
         Commands::Status => {
             let status = store.status()?;
             println!("aliases: {}", status.aliases);
+            println!("collections: {}", status.collections);
+            println!(
+                "active collections: {}",
+                status.active_collections.join(", ")
+            );
             println!("pending sync records: {}", status.pending);
             if let Some(config) = load_config()? {
                 println!("sync: configured for {}", config.username);
@@ -403,7 +607,7 @@ fn main() -> Result<()> {
         }
         Commands::Doctor { fix } => {
             if fix {
-                let aliases = store.list()?;
+                let aliases = store.list_effective()?;
                 for shell in shells_to_repair()? {
                     for message in repair_shell_integration(&shell, &aliases)? {
                         println!("{message}");
@@ -513,10 +717,10 @@ fn checksum_for_asset(checksums: &str, asset_name: &str) -> Result<String> {
         let mut parts = line.split_whitespace();
         let checksum = parts.next();
         let asset = parts.next();
-        if let (Some(checksum), Some(asset)) = (checksum, asset) {
-            if asset.trim_start_matches('*') == asset_name {
-                return Ok(checksum.to_owned());
-            }
+        if let (Some(checksum), Some(asset)) = (checksum, asset)
+            && asset.trim_start_matches('*') == asset_name
+        {
+            return Ok(checksum.to_owned());
         }
     }
 
@@ -574,6 +778,79 @@ fn update_release_binary(destination: &Path) -> Result<()> {
     update_release_binary_from_base_url(destination, &base_url)
 }
 
+fn select_alias(store: &Store, query: &[String], print_command: bool, first: bool) -> Result<()> {
+    let aliases = store.list_effective()?;
+    if aliases.is_empty() {
+        bail!("no aliases found");
+    }
+
+    let query = query.join(" ");
+    let selected_index = if first {
+        Some(
+            first_matching_alias(&aliases, &query)
+                .ok_or_else(|| anyhow!("no aliases matched: {query}"))?,
+        )
+    } else {
+        if !io::stderr().is_terminal() {
+            bail!("select requires an interactive terminal");
+        }
+        interactively_select_alias(&aliases, &query)?
+    };
+
+    let Some(selected_index) = selected_index else {
+        return Ok(());
+    };
+    let command = &aliases[selected_index].command;
+
+    if print_command {
+        println!("{command}");
+        return Ok(());
+    }
+
+    run_selected_command(command)
+}
+
+fn first_matching_alias(aliases: &[Alias], query: &str) -> Option<usize> {
+    if query.trim().is_empty() {
+        return Some(0);
+    }
+
+    let query = query.to_ascii_lowercase();
+    aliases
+        .iter()
+        .position(|alias| alias_search_text(alias).contains(&query))
+}
+
+fn interactively_select_alias(aliases: &[Alias], query: &str) -> Result<Option<usize>> {
+    let items = aliases.iter().map(alias_select_line).collect::<Vec<_>>();
+    let theme = ColorfulTheme::default();
+    FuzzySelect::with_theme(&theme)
+        .with_prompt("Select alias")
+        .items(&items)
+        .with_initial_text(query)
+        .default(0)
+        .interact_opt()
+        .context("failed to read alias selection")
+}
+
+fn alias_select_line(alias: &Alias) -> String {
+    format!("{}\t{}", alias.name, alias.command)
+}
+
+fn alias_search_text(alias: &Alias) -> String {
+    format!("{}\t{}", alias.name, alias.command).to_ascii_lowercase()
+}
+
+fn run_selected_command(command: &str) -> Result<()> {
+    let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
+    let status = std::process::Command::new(shell)
+        .arg("-lc")
+        .arg(command)
+        .status()
+        .context("failed to run selected alias")?;
+    std::process::exit(status.code().unwrap_or(1));
+}
+
 fn update_release_binary_from_base_url(destination: &Path, base_url: &str) -> Result<()> {
     let target = release_target()?;
     let archive_name = format!("aliaz-{target}.tar.gz");
@@ -604,6 +881,8 @@ struct Store {
 
 struct StoreStatus {
     aliases: i64,
+    collections: i64,
+    active_collections: Vec<String>,
     pending: i64,
 }
 
@@ -622,15 +901,36 @@ impl Store {
         let conn = Connection::open(path)?;
         conn.execute_batch(
             "
-            CREATE TABLE IF NOT EXISTS aliases (
-                id TEXT NOT NULL UNIQUE,
-                name TEXT PRIMARY KEY,
-                command TEXT NOT NULL,
+            PRAGMA foreign_keys = ON;
+
+            CREATE TABLE IF NOT EXISTS collections (
+                id TEXT PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
                 deleted INTEGER NOT NULL DEFAULT 0,
                 dirty INTEGER NOT NULL DEFAULT 0,
                 sync_version INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS active_collections (
+                collection_id TEXT PRIMARY KEY,
+                priority INTEGER NOT NULL,
+                FOREIGN KEY (collection_id) REFERENCES collections(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS aliases (
+                id TEXT PRIMARY KEY,
+                collection_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                command TEXT NOT NULL,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                dirty INTEGER NOT NULL DEFAULT 0,
+                sync_version INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(collection_id, name),
+                FOREIGN KEY (collection_id) REFERENCES collections(id)
             );
 
             CREATE TABLE IF NOT EXISTS conflict_backups (
@@ -642,34 +942,257 @@ impl Store {
             );
             ",
         )?;
+        ensure_shared_collection(&conn)?;
         migrate_alias_table(&conn)?;
+        migrate_alias_collections(&conn)?;
+        ensure_shared_collection(&conn)?;
 
         Ok(Self { conn })
     }
 
-    fn upsert(&self, name: &str, command: &str) -> Result<()> {
+    fn create_collection(&self, name: &str) -> Result<()> {
         validate_name(name)?;
+        if name == DEFAULT_COLLECTION_NAME {
+            ensure_shared_collection(&self.conn)?;
+            return Ok(());
+        }
         let now = now_unix()?;
         self.conn.execute(
             "
-            INSERT INTO aliases (id, name, command, deleted, dirty, sync_version, created_at, updated_at)
-            VALUES (?1, ?2, ?3, 0, 1, 0, ?4, ?4)
+            INSERT INTO collections (id, name, deleted, dirty, sync_version, created_at, updated_at)
+            VALUES (?1, ?2, 0, 1, 0, ?3, ?3)
             ON CONFLICT(name) DO UPDATE SET
+                deleted = 0,
+                dirty = 1,
+                updated_at = excluded.updated_at
+            ",
+            params![collection_id_for_name(name), name, now],
+        )?;
+        Ok(())
+    }
+
+    fn collections(&self) -> Result<Vec<Collection>> {
+        let mut statement = self.conn.prepare(
+            "
+            SELECT c.id, c.name, c.deleted, c.dirty, c.sync_version, c.updated_at,
+                   CASE WHEN ac.collection_id IS NULL THEN 0 ELSE 1 END AS active,
+                   COALESCE(ac.priority, -1) AS priority
+            FROM collections c
+            LEFT JOIN active_collections ac ON ac.collection_id = c.id
+            WHERE c.deleted = 0
+            ORDER BY
+                CASE WHEN c.name = ?1 THEN 0 ELSE 1 END,
+                CASE WHEN ac.collection_id IS NULL THEN 1 ELSE 0 END,
+                ac.priority ASC,
+                c.name ASC
+            ",
+        )?;
+        Ok(statement
+            .query_map([DEFAULT_COLLECTION_NAME], collection_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    fn collection_by_name(&self, name: &str) -> Result<Collection> {
+        validate_name(name)?;
+        let collection = self
+            .conn
+            .query_row(
+                "
+                SELECT c.id, c.name, c.deleted, c.dirty, c.sync_version, c.updated_at,
+                       CASE WHEN ac.collection_id IS NULL THEN 0 ELSE 1 END AS active,
+                       COALESCE(ac.priority, -1) AS priority
+                FROM collections c
+                LEFT JOIN active_collections ac ON ac.collection_id = c.id
+                WHERE c.name = ?1 AND c.deleted = 0
+                ",
+                [name],
+                collection_from_row,
+            )
+            .optional()?;
+        collection.ok_or_else(|| anyhow!("collection not found: {name}"))
+    }
+
+    fn upsert_in_collection(&self, collection_name: &str, name: &str, command: &str) -> Result<()> {
+        validate_name(name)?;
+        let collection = self.collection_by_name(collection_name)?;
+        let now = now_unix()?;
+        self.conn.execute(
+            "
+            INSERT INTO aliases (id, collection_id, name, command, deleted, dirty, sync_version, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, 0, 1, 0, ?5, ?5)
+            ON CONFLICT(collection_id, name) DO UPDATE SET
                 command = excluded.command,
                 deleted = 0,
                 dirty = 1,
                 updated_at = excluded.updated_at
             ",
-            params![Uuid::new_v4().to_string(), name, command, now],
+            params![Uuid::new_v4().to_string(), collection.id, name, command, now],
         )?;
         Ok(())
     }
 
-    fn update(&self, name: &str, command: &str) -> Result<()> {
+    fn list_effective(&self) -> Result<Vec<Alias>> {
+        let mut statement = self.conn.prepare(
+            "
+            SELECT a.id, a.collection_id, c.name, a.name, a.command, a.deleted, a.dirty,
+                   a.sync_version, a.updated_at
+            FROM aliases a
+            JOIN collections c ON c.id = a.collection_id
+            JOIN active_collections ac ON ac.collection_id = c.id
+            WHERE a.deleted = 0 AND c.deleted = 0
+              AND NOT EXISTS (
+                SELECT 1
+                FROM aliases newer
+                JOIN active_collections newer_ac ON newer_ac.collection_id = newer.collection_id
+                JOIN collections newer_c ON newer_c.id = newer.collection_id
+                WHERE newer.name = a.name
+                  AND newer.deleted = 0
+                  AND newer_c.deleted = 0
+                  AND newer_ac.priority > ac.priority
+              )
+            ORDER BY a.name ASC
+            ",
+        )?;
+        Ok(statement
+            .query_map([], alias_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    fn list_all(&self, collection_name: Option<&str>) -> Result<Vec<Alias>> {
+        if let Some(collection_name) = collection_name {
+            let collection = self.collection_by_name(collection_name)?;
+            let mut statement = self.conn.prepare(
+                "
+                SELECT a.id, a.collection_id, c.name, a.name, a.command, a.deleted, a.dirty,
+                       a.sync_version, a.updated_at
+                FROM aliases a
+                JOIN collections c ON c.id = a.collection_id
+                WHERE a.deleted = 0 AND c.deleted = 0 AND a.collection_id = ?1
+                ORDER BY a.name ASC
+                ",
+            )?;
+            return Ok(statement
+                .query_map([collection.id], alias_from_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?);
+        }
+
+        let mut statement = self.conn.prepare(
+            "
+            SELECT a.id, a.collection_id, c.name, a.name, a.command, a.deleted, a.dirty,
+                   a.sync_version, a.updated_at
+            FROM aliases a
+            JOIN collections c ON c.id = a.collection_id
+            WHERE a.deleted = 0 AND c.deleted = 0
+            ORDER BY c.name ASC, a.name ASC
+            ",
+        )?;
+        Ok(statement
+            .query_map([], alias_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    fn activate_collections(&self, names: &[String]) -> Result<Vec<String>> {
+        let mut activated = Vec::new();
+        let mut priority = self.next_collection_priority()?;
+        for name in names {
+            validate_name(name)?;
+            if name == DEFAULT_COLLECTION_NAME {
+                continue;
+            }
+            let collection = self.collection_by_name(name)?;
+            if collection.active {
+                continue;
+            }
+            self.conn.execute(
+                "INSERT INTO active_collections (collection_id, priority) VALUES (?1, ?2)",
+                params![collection.id, priority],
+            )?;
+            activated.push(collection.name);
+            priority += 1;
+        }
+        Ok(activated)
+    }
+
+    fn deactivate_collection(&self, name: &str) -> Result<bool> {
         validate_name(name)?;
+        if name == DEFAULT_COLLECTION_NAME {
+            bail!("shared is always active");
+        }
+        let collection = self.collection_by_name(name)?;
         let changed = self.conn.execute(
-            "UPDATE aliases SET command = ?2, deleted = 0, dirty = 1, updated_at = ?3 WHERE name = ?1 AND deleted = 0",
-            params![name, command, now_unix()?],
+            "DELETE FROM active_collections WHERE collection_id = ?1",
+            [collection.id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    fn next_collection_priority(&self) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(MAX(priority), 0) + 1 FROM active_collections",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
+    fn update_alias(
+        &self,
+        collection_name: Option<&str>,
+        name: &str,
+        command: &str,
+    ) -> Result<String> {
+        validate_name(name)?;
+        let collection = self.resolve_alias_scope(collection_name, name)?;
+        let changed = self.conn.execute(
+            "
+            UPDATE aliases
+            SET command = ?3, deleted = 0, dirty = 1, updated_at = ?4
+            WHERE collection_id = ?1 AND name = ?2 AND deleted = 0
+            ",
+            params![collection.id, name, command, now_unix()?],
+        )?;
+        if changed == 0 {
+            bail!("alias not found: {name}");
+        }
+        Ok(collection.name)
+    }
+
+    fn delete_alias(&self, collection_name: Option<&str>, name: &str) -> Result<String> {
+        validate_name(name)?;
+        let collection = self.resolve_alias_scope(collection_name, name)?;
+        let changed = self.conn.execute(
+            "
+            UPDATE aliases
+            SET deleted = 1, dirty = 1, updated_at = ?3
+            WHERE collection_id = ?1 AND name = ?2 AND deleted = 0
+            ",
+            params![collection.id, name, now_unix()?],
+        )?;
+        if changed == 0 {
+            bail!("alias not found: {name}");
+        }
+        Ok(collection.name)
+    }
+
+    fn move_alias(&self, name: &str, from: &str, to: &str) -> Result<()> {
+        validate_name(name)?;
+        let from_collection = self.collection_by_name(from)?;
+        let to_collection = self.collection_by_name(to)?;
+        let target_exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM aliases WHERE collection_id = ?1 AND name = ?2 AND deleted = 0",
+            params![to_collection.id, name],
+            |row| row.get(0),
+        )?;
+        if target_exists > 0 {
+            bail!("alias already exists in target collection: {name}");
+        }
+        let now = now_unix()?;
+        let changed = self.conn.execute(
+            "
+            UPDATE aliases
+            SET collection_id = ?1, dirty = 1, updated_at = ?4
+            WHERE collection_id = ?2 AND name = ?3 AND deleted = 0
+            ",
+            params![to_collection.id, from_collection.id, name, now],
         )?;
         if changed == 0 {
             bail!("alias not found: {name}");
@@ -677,34 +1200,134 @@ impl Store {
         Ok(())
     }
 
-    fn delete(&self, name: &str) -> Result<()> {
-        validate_name(name)?;
-        let changed = self.conn.execute(
-            "UPDATE aliases SET deleted = 1, dirty = 1, updated_at = ?2 WHERE name = ?1 AND deleted = 0",
-            params![name, now_unix()?],
-        )?;
-        if changed == 0 {
-            bail!("alias not found: {name}");
+    fn resolve_alias_scope(
+        &self,
+        collection_name: Option<&str>,
+        alias_name: &str,
+    ) -> Result<Collection> {
+        if let Some(collection_name) = collection_name {
+            return self.collection_by_name(collection_name);
         }
-        Ok(())
+
+        let mut statement = self.conn.prepare(
+            "
+            SELECT c.id, c.name, c.deleted, c.dirty, c.sync_version, c.updated_at,
+                   CASE WHEN ac.collection_id IS NULL THEN 0 ELSE 1 END AS active,
+                   COALESCE(ac.priority, -1) AS priority
+            FROM aliases a
+            JOIN collections c ON c.id = a.collection_id
+            LEFT JOIN active_collections ac ON ac.collection_id = c.id
+            WHERE a.name = ?1 AND a.deleted = 0 AND c.deleted = 0
+            ",
+        )?;
+        let collections = statement
+            .query_map([alias_name], collection_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        match collections.len() {
+            0 => bail!("alias not found: {alias_name}"),
+            1 => Ok(collections.into_iter().next().expect("one collection")),
+            _ => bail!("alias is ambiguous; pass --collection"),
+        }
     }
 
-    fn list(&self) -> Result<Vec<Alias>> {
-        self.aliases_where("deleted = 0")
+    fn pending_collections(&self) -> Result<Vec<Collection>> {
+        let mut statement = self.conn.prepare(
+            "
+            SELECT c.id, c.name, c.deleted, c.dirty, c.sync_version, c.updated_at,
+                   CASE WHEN ac.collection_id IS NULL THEN 0 ELSE 1 END AS active,
+                   COALESCE(ac.priority, -1) AS priority
+            FROM collections c
+            LEFT JOIN active_collections ac ON ac.collection_id = c.id
+            WHERE c.dirty = 1
+            ORDER BY c.name ASC
+            ",
+        )?;
+        Ok(statement
+            .query_map([], collection_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    fn pending(&self) -> Result<Vec<Alias>> {
-        self.aliases_where("dirty = 1")
+    fn pending_aliases(&self) -> Result<Vec<Alias>> {
+        let mut statement = self.conn.prepare(
+            "
+            SELECT a.id, a.collection_id, c.name, a.name, a.command, a.deleted, a.dirty,
+                   a.sync_version, a.updated_at
+            FROM aliases a
+            JOIN collections c ON c.id = a.collection_id
+            WHERE a.dirty = 1
+            ORDER BY c.name ASC, a.name ASC
+            ",
+        )?;
+        Ok(statement
+            .query_map([], alias_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    fn find_by_name(&self, name: &str) -> Result<Option<Alias>> {
-        let mut aliases = self.aliases_where_with_param("name = ?1", name)?;
-        Ok(aliases.pop())
+    fn find_alias_by_collection_and_name(
+        &self,
+        collection_id: &str,
+        name: &str,
+    ) -> Result<Option<Alias>> {
+        Ok(self
+            .conn
+            .query_row(
+                "
+                SELECT a.id, a.collection_id, c.name, a.name, a.command, a.deleted, a.dirty,
+                       a.sync_version, a.updated_at
+                FROM aliases a
+                JOIN collections c ON c.id = a.collection_id
+                WHERE a.collection_id = ?1 AND a.name = ?2
+                ",
+                params![collection_id, name],
+                alias_from_row,
+            )
+            .optional()?)
     }
 
-    fn apply_remote(&self, record: &RemoteRecord, payload: &AliasPayload) -> Result<bool> {
+    fn apply_remote_collection(
+        &self,
+        record: &RemoteRecord,
+        payload: &CollectionPayload,
+    ) -> Result<bool> {
         validate_name(&payload.name)?;
-        if let Some(local) = self.find_by_name(&payload.name)? {
+        let deleted = payload.deleted && payload.name != DEFAULT_COLLECTION_NAME;
+        if let Ok(local) = self.collection_by_name(&payload.name)
+            && local.dirty
+            && local.updated_at > payload.updated_at
+        {
+            return Ok(false);
+        }
+        self.conn.execute(
+            "
+            INSERT INTO collections (id, name, deleted, dirty, sync_version, created_at, updated_at)
+            VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6)
+            ON CONFLICT(name) DO UPDATE SET
+                deleted = excluded.deleted,
+                dirty = 0,
+                sync_version = excluded.sync_version,
+                updated_at = excluded.updated_at
+            ",
+            params![
+                record.id,
+                payload.name,
+                deleted as i64,
+                record.version,
+                now_unix()?,
+                payload.updated_at
+            ],
+        )?;
+        ensure_shared_collection(&self.conn)?;
+        Ok(true)
+    }
+
+    fn apply_remote_alias(&self, record: &RemoteRecord, payload: &AliasPayload) -> Result<bool> {
+        validate_name(&payload.name)?;
+        validate_name(&payload.collection_name)?;
+        self.ensure_remote_collection(&payload.collection_id, &payload.collection_name)?;
+        let collection = self.collection_by_name(&payload.collection_name)?;
+        if let Some(local) =
+            self.find_alias_by_collection_and_name(&collection.id, &payload.name)?
+        {
             if local.dirty && local.updated_at > payload.updated_at {
                 return Ok(false);
             }
@@ -714,7 +1337,7 @@ impl Store {
                      VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![
                         Uuid::new_v4().to_string(),
-                        local.name,
+                        format!("{}/{}", local.collection_name, local.name),
                         local.command,
                         record.version,
                         now_unix()?
@@ -725,9 +1348,9 @@ impl Store {
 
         self.conn.execute(
             "
-            INSERT INTO aliases (id, name, command, deleted, dirty, sync_version, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?7)
-            ON CONFLICT(name) DO UPDATE SET
+            INSERT INTO aliases (id, collection_id, name, command, deleted, dirty, sync_version, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8)
+            ON CONFLICT(collection_id, name) DO UPDATE SET
                 id = excluded.id,
                 command = excluded.command,
                 deleted = excluded.deleted,
@@ -737,6 +1360,7 @@ impl Store {
             ",
             params![
                 record.id,
+                collection.id,
                 payload.name,
                 payload.command,
                 payload.deleted as i64,
@@ -748,7 +1372,32 @@ impl Store {
         Ok(true)
     }
 
-    fn mark_synced(&self, id: &str, version: i64) -> Result<()> {
+    fn ensure_remote_collection(&self, id: &str, name: &str) -> Result<()> {
+        validate_name(name)?;
+        if self.collection_by_name(name).is_ok() {
+            return Ok(());
+        }
+        let now = now_unix()?;
+        self.conn.execute(
+            "
+            INSERT INTO collections (id, name, deleted, dirty, sync_version, created_at, updated_at)
+            VALUES (?1, ?2, 0, 0, 0, ?3, ?3)
+            ON CONFLICT(name) DO UPDATE SET deleted = 0
+            ",
+            params![id, name, now],
+        )?;
+        Ok(())
+    }
+
+    fn mark_collection_synced(&self, id: &str, version: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE collections SET dirty = 0, sync_version = ?2 WHERE id = ?1",
+            params![id, version],
+        )?;
+        Ok(())
+    }
+
+    fn mark_alias_synced(&self, id: &str, version: i64) -> Result<()> {
         self.conn.execute(
             "UPDATE aliases SET dirty = 0, sync_version = ?2 WHERE id = ?1",
             params![id, version],
@@ -757,58 +1406,108 @@ impl Store {
     }
 
     fn status(&self) -> Result<StoreStatus> {
-        let aliases = self.conn.query_row(
-            "SELECT COUNT(*) FROM aliases WHERE deleted = 0",
+        let aliases = self.list_effective()?.len() as i64;
+        let collections = self.conn.query_row(
+            "SELECT COUNT(*) FROM collections WHERE deleted = 0",
             [],
             |row| row.get(0),
         )?;
-        let pending =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM aliases WHERE dirty = 1", [], |row| {
-                    row.get(0)
-                })?;
-        Ok(StoreStatus { aliases, pending })
-    }
-
-    fn aliases_where(&self, clause: &str) -> Result<Vec<Alias>> {
-        let sql = format!(
-            "SELECT id, name, command, deleted, dirty, sync_version, updated_at FROM aliases WHERE {clause} ORDER BY name ASC"
-        );
-        let mut statement = self.conn.prepare(&sql)?;
-        let aliases = statement
-            .query_map([], alias_from_row)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(aliases)
-    }
-
-    fn aliases_where_with_param(&self, clause: &str, value: &str) -> Result<Vec<Alias>> {
-        let sql = format!(
-            "SELECT id, name, command, deleted, dirty, sync_version, updated_at FROM aliases WHERE {clause} ORDER BY name ASC"
-        );
-        let mut statement = self.conn.prepare(&sql)?;
-        let aliases = statement
-            .query_map([value], alias_from_row)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(aliases)
+        let pending = self.conn.query_row(
+            "
+            SELECT
+                (SELECT COUNT(*) FROM collections WHERE dirty = 1) +
+                (SELECT COUNT(*) FROM aliases WHERE dirty = 1)
+            ",
+            [],
+            |row| row.get(0),
+        )?;
+        let active_collections = self
+            .collections()?
+            .into_iter()
+            .filter(|collection| collection.active)
+            .map(|collection| collection.name)
+            .collect();
+        Ok(StoreStatus {
+            aliases,
+            collections,
+            active_collections,
+            pending,
+        })
     }
 }
 
 fn alias_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Alias> {
     Ok(Alias {
         id: row.get(0)?,
-        name: row.get(1)?,
-        command: row.get(2)?,
-        deleted: row.get::<_, i64>(3)? == 1,
-        dirty: row.get::<_, i64>(4)? == 1,
-        sync_version: row.get(5)?,
-        updated_at: row.get(6)?,
+        collection_id: row.get(1)?,
+        collection_name: row.get(2)?,
+        name: row.get(3)?,
+        command: row.get(4)?,
+        deleted: row.get::<_, i64>(5)? == 1,
+        dirty: row.get::<_, i64>(6)? == 1,
+        sync_version: row.get(7)?,
+        updated_at: row.get(8)?,
     })
 }
 
+fn collection_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Collection> {
+    Ok(Collection {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        deleted: row.get::<_, i64>(2)? == 1,
+        dirty: row.get::<_, i64>(3)? == 1,
+        sync_version: row.get(4)?,
+        updated_at: row.get(5)?,
+        active: row.get::<_, i64>(6)? == 1,
+        priority: row.get(7)?,
+    })
+}
+
+fn collection_id_for_name(name: &str) -> String {
+    if name == DEFAULT_COLLECTION_NAME {
+        DEFAULT_COLLECTION_ID.to_owned()
+    } else {
+        format!("collection:{name}")
+    }
+}
+
+fn ensure_shared_collection(conn: &Connection) -> Result<()> {
+    let now = now_unix()?;
+    conn.execute(
+        "
+        INSERT INTO collections (id, name, deleted, dirty, sync_version, created_at, updated_at)
+        VALUES (?1, ?2, 0, 0, 0, ?3, ?3)
+        ON CONFLICT(id) DO UPDATE SET deleted = 0, name = excluded.name
+        ",
+        params![DEFAULT_COLLECTION_ID, DEFAULT_COLLECTION_NAME, now],
+    )?;
+    conn.execute(
+        "
+        INSERT INTO active_collections (collection_id, priority)
+        VALUES (?1, 0)
+        ON CONFLICT(collection_id) DO UPDATE SET priority = 0
+        ",
+        params![DEFAULT_COLLECTION_ID],
+    )?;
+    Ok(())
+}
+
 fn migrate_alias_table(conn: &Connection) -> Result<()> {
-    let columns = table_columns(conn)?;
+    let columns = table_columns(conn, "aliases")?;
     if !columns.contains("id") {
         conn.execute("ALTER TABLE aliases ADD COLUMN id TEXT", [])?;
+    }
+    if !columns.contains("created_at") {
+        conn.execute(
+            "ALTER TABLE aliases ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !columns.contains("updated_at") {
+        conn.execute(
+            "ALTER TABLE aliases ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
     }
     if !columns.contains("deleted") {
         conn.execute(
@@ -842,15 +1541,59 @@ fn migrate_alias_table(conn: &Connection) -> Result<()> {
         )?;
     }
     conn.execute(
-        "UPDATE aliases SET updated_at = ?1 WHERE updated_at IS NULL OR typeof(updated_at) = 'text'",
+        "UPDATE aliases SET created_at = ?1 WHERE created_at IS NULL OR created_at = 0 OR typeof(created_at) = 'text'",
+        params![now_unix()?],
+    )?;
+    conn.execute(
+        "UPDATE aliases SET updated_at = ?1 WHERE updated_at IS NULL OR updated_at = 0 OR typeof(updated_at) = 'text'",
         params![now_unix()?],
     )?;
 
     Ok(())
 }
 
-fn table_columns(conn: &Connection) -> Result<HashSet<String>> {
-    let mut statement = conn.prepare("PRAGMA table_info(aliases)")?;
+fn migrate_alias_collections(conn: &Connection) -> Result<()> {
+    let columns = table_columns(conn, "aliases")?;
+    if columns.contains("collection_id") {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        "
+        CREATE TABLE aliases_new (
+            id TEXT PRIMARY KEY,
+            collection_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            command TEXT NOT NULL,
+            deleted INTEGER NOT NULL DEFAULT 0,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            sync_version INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(collection_id, name),
+            FOREIGN KEY (collection_id) REFERENCES collections(id)
+        );
+        ",
+    )?;
+    conn.execute(
+        "
+        INSERT INTO aliases_new (id, collection_id, name, command, deleted, dirty, sync_version, created_at, updated_at)
+        SELECT id, ?1, name, command, deleted, dirty, sync_version, created_at, updated_at
+        FROM aliases
+        ",
+        params![DEFAULT_COLLECTION_ID],
+    )?;
+    conn.execute_batch(
+        "
+        DROP TABLE aliases;
+        ALTER TABLE aliases_new RENAME TO aliases;
+        ",
+    )?;
+    Ok(())
+}
+
+fn table_columns(conn: &Connection, table: &str) -> Result<HashSet<String>> {
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let columns = statement
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<rusqlite::Result<HashSet<_>>>()?;
@@ -873,6 +1616,8 @@ fn parse_aliases(contents: &str) -> Result<Vec<Alias>> {
                 validate_name(name)?;
                 aliases.push(Alias {
                     id: Uuid::new_v4().to_string(),
+                    collection_id: DEFAULT_COLLECTION_ID.to_owned(),
+                    collection_name: DEFAULT_COLLECTION_NAME.to_owned(),
                     name: name.to_owned(),
                     command: command.to_owned(),
                     deleted: false,
@@ -932,6 +1677,56 @@ fn prompt_secret_if_missing(value: Option<String>, prompt: &str) -> Result<Strin
         Some(value) => Ok(value),
         None => rpassword::prompt_password(prompt).context("failed to read secret from terminal"),
     }
+}
+
+fn parse_collection_csv(value: Option<&str>) -> Result<Vec<String>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let mut names = Vec::new();
+    for raw in value.split(',') {
+        let name = raw.trim();
+        if name.is_empty() {
+            continue;
+        }
+        validate_name(name)?;
+        if name != DEFAULT_COLLECTION_NAME {
+            names.push(name.to_owned());
+        }
+    }
+    Ok(names)
+}
+
+fn create_and_activate_collections(store: &Store, names: &[String]) -> Result<()> {
+    for name in names {
+        store.create_collection(name)?;
+    }
+    store.activate_collections(names)?;
+    Ok(())
+}
+
+fn prompt_for_collection_selection(store: &Store) -> Result<Vec<String>> {
+    if !io::stdin().is_terminal() {
+        return Ok(Vec::new());
+    }
+
+    let names = store
+        .collections()?
+        .into_iter()
+        .filter(|collection| collection.name != DEFAULT_COLLECTION_NAME)
+        .map(|collection| collection.name)
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    println!("Available collections: {}", names.join(", "));
+    print!("Activate collections for this computer (comma-separated, blank for shared only): ");
+    io::stdout().flush()?;
+
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    parse_collection_csv(Some(answer.trim()))
 }
 
 fn load_config() -> Result<Option<SyncConfig>> {
@@ -1129,12 +1924,10 @@ fn uninstall_startup_file(shell: &Shell) -> Result<bool> {
     let mut removed = false;
 
     while let Some(line) = lines.next() {
-        if line == comment {
-            if matches!(lines.peek(), Some(next) if *next == source_line) {
-                lines.next();
-                removed = true;
-                continue;
-            }
+        if line == comment && matches!(lines.peek(), Some(next) if *next == source_line) {
+            lines.next();
+            removed = true;
+            continue;
         }
 
         if line == source_line {
@@ -1277,11 +2070,22 @@ fn sh_wrapper_lines(binary: &str, source_command: &str) -> Vec<String> {
         "aliaz() {".to_owned(),
         "  local __aliaz_status".to_owned(),
         "  local __aliaz_shell".to_owned(),
+        "  local __aliaz_selected_command".to_owned(),
+        "  if [ \"${1:-}\" = \"select\" ]; then".to_owned(),
+        "    __aliaz_selected_command=$(\"$__aliaz_bin\" select --print-command \"${@:2}\")"
+            .to_owned(),
+        "    __aliaz_status=$?".to_owned(),
+        "    if [ $__aliaz_status -eq 0 ] && [ -n \"$__aliaz_selected_command\" ]; then".to_owned(),
+        "      eval \"$__aliaz_selected_command\"".to_owned(),
+        "      return $?".to_owned(),
+        "    fi".to_owned(),
+        "    return $__aliaz_status".to_owned(),
+        "  fi".to_owned(),
         "  \"$__aliaz_bin\" \"$@\"".to_owned(),
         "  __aliaz_status=$?".to_owned(),
         "  if [ $__aliaz_status -eq 0 ]; then".to_owned(),
         "    case \"${1:-}\" in".to_owned(),
-        "      add|edit|rm|delete|migrate|import|sync)".to_owned(),
+        "      add|edit|rm|delete|collection|migrate|import|sync)".to_owned(),
         "        __aliaz_shell=\"\"".to_owned(),
         "        if [ -n \"${ZSH_VERSION:-}\" ]; then".to_owned(),
         "          __aliaz_shell=\"zsh\"".to_owned(),
@@ -1303,16 +2107,25 @@ fn sh_wrapper_lines(binary: &str, source_command: &str) -> Vec<String> {
     ]
 }
 
-fn fish_wrapper_lines(binary: &str, path: &PathBuf) -> Vec<String> {
+fn fish_wrapper_lines(binary: &str, path: &Path) -> Vec<String> {
     vec![
         "# Managed by Aliaz. Do not edit.".to_owned(),
         format!("set -g __aliaz_bin {}", shell_quote(binary)),
         "function aliaz".to_owned(),
+        "  if test (count $argv) -gt 0; and test $argv[1] = select".to_owned(),
+        "    set -l __aliaz_selected_command (\"$__aliaz_bin\" select --print-command $argv[2..-1])".to_owned(),
+        "    set -l __aliaz_status $status".to_owned(),
+        "    if test $__aliaz_status -eq 0; and test -n \"$__aliaz_selected_command\"".to_owned(),
+        "      eval \"$__aliaz_selected_command\"".to_owned(),
+        "      return $status".to_owned(),
+        "    end".to_owned(),
+        "    return $__aliaz_status".to_owned(),
+        "  end".to_owned(),
         "  \"$__aliaz_bin\" $argv".to_owned(),
         "  set -l __aliaz_status $status".to_owned(),
         "  if test $__aliaz_status -eq 0".to_owned(),
         "    switch $argv[1]".to_owned(),
-        "      case add edit rm delete migrate import sync".to_owned(),
+        "      case add edit rm delete collection migrate import sync".to_owned(),
         "        \"$__aliaz_bin\" init fish >/dev/null".to_owned(),
         format!(
             "        source {}",
@@ -1417,20 +2230,43 @@ fn sync_aliases(
 
     let mut pulled = 0;
     for record in &pull.records {
-        if record.record_type != "alias" {
-            continue;
+        if record.record_type == "collection" {
+            let payload: CollectionPayload = decrypt_record(&key, &record.encrypted_blob)?;
+            if store.apply_remote_collection(record, &payload)? {
+                pulled += 1;
+            }
         }
-        let payload = decrypt_alias(&key, &record.encrypted_blob)?;
-        if store.apply_remote(record, &payload)? {
-            pulled += 1;
+    }
+    for record in &pull.records {
+        if record.record_type == "alias" {
+            let payload: AliasPayload = decrypt_record(&key, &record.encrypted_blob)?;
+            if store.apply_remote_alias(record, &payload)? {
+                pulled += 1;
+            }
         }
     }
     config.latest_version = pull.latest_version;
 
-    let pending = store.pending()?;
-    let mut uploads = Vec::with_capacity(pending.len());
-    for alias in &pending {
+    let pending_collections = store.pending_collections()?;
+    let pending_aliases = store.pending_aliases()?;
+    let mut uploads = Vec::with_capacity(pending_collections.len() + pending_aliases.len());
+    for collection in &pending_collections {
+        let payload = CollectionPayload {
+            name: collection.name.clone(),
+            deleted: collection.deleted,
+            updated_at: collection.updated_at,
+        };
+        uploads.push(UploadRecord {
+            id: collection.id.clone(),
+            record_type: "collection".to_owned(),
+            encrypted_blob: encrypt_record(&key, &payload)?,
+            updated_at: collection.updated_at,
+        });
+    }
+    for alias in &pending_aliases {
         let payload = AliasPayload {
+            collection_id: alias.collection_id.clone(),
+            collection_name: alias.collection_name.clone(),
             name: alias.name.clone(),
             command: alias.command.clone(),
             deleted: alias.deleted,
@@ -1439,7 +2275,7 @@ fn sync_aliases(
         uploads.push(UploadRecord {
             id: alias.id.clone(),
             record_type: "alias".to_owned(),
-            encrypted_blob: encrypt_alias(&key, &payload)?,
+            encrypted_blob: encrypt_record(&key, &payload)?,
             updated_at: alias.updated_at,
         });
     }
@@ -1455,7 +2291,14 @@ fn sync_aliases(
             .error_for_status()?
             .json()?;
         for record in push.records {
-            store.mark_synced(&record.id, record.version)?;
+            if pending_collections
+                .iter()
+                .any(|collection| collection.id == record.id)
+            {
+                store.mark_collection_synced(&record.id, record.version)?;
+            } else {
+                store.mark_alias_synced(&record.id, record.version)?;
+            }
         }
         config.latest_version = push.latest_version;
     }
@@ -1474,29 +2317,29 @@ fn derive_key(recovery_phrase: &str) -> Result<[u8; 32]> {
     Ok(key)
 }
 
-fn encrypt_alias(key: &[u8; 32], payload: &AliasPayload) -> Result<String> {
+fn encrypt_record<T: Serialize>(key: &[u8; 32], payload: &T) -> Result<String> {
     let cipher = XChaCha20Poly1305::new(key.into());
     let mut nonce_bytes = [0u8; 24];
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
     let nonce = XNonce::from_slice(&nonce_bytes);
     let ciphertext = cipher
         .encrypt(nonce, serde_json::to_vec(payload)?.as_ref())
-        .map_err(|_| anyhow!("failed to encrypt alias"))?;
+        .map_err(|_| anyhow!("failed to encrypt record"))?;
     let mut blob = nonce_bytes.to_vec();
     blob.extend(ciphertext);
     Ok(BASE64.encode(blob))
 }
 
-fn decrypt_alias(key: &[u8; 32], encrypted_blob: &str) -> Result<AliasPayload> {
+fn decrypt_record<T: for<'de> Deserialize<'de>>(key: &[u8; 32], encrypted_blob: &str) -> Result<T> {
     let blob = BASE64.decode(encrypted_blob)?;
     if blob.len() < 25 {
-        bail!("encrypted alias blob is too short");
+        bail!("encrypted record blob is too short");
     }
     let (nonce_bytes, ciphertext) = blob.split_at(24);
     let cipher = XChaCha20Poly1305::new(key.into());
     let plaintext = cipher
         .decrypt(XNonce::from_slice(nonce_bytes), ciphertext)
-        .map_err(|_| anyhow!("failed to decrypt alias"))?;
+        .map_err(|_| anyhow!("failed to decrypt record"))?;
     Ok(serde_json::from_slice(&plaintext)?)
 }
 
@@ -1537,23 +2380,50 @@ mod tests {
     use tar::Builder;
 
     #[test]
-    fn encryption_round_trips_alias_payload() {
+    fn encryption_round_trips_collection_scoped_alias_payload() {
         let key = derive_key("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
         let payload = AliasPayload {
+            collection_id: DEFAULT_COLLECTION_ID.to_owned(),
+            collection_name: DEFAULT_COLLECTION_NAME.to_owned(),
             name: "gs".to_owned(),
             command: "git status".to_owned(),
             deleted: false,
             updated_at: 123,
         };
 
-        let encrypted = encrypt_alias(&key, &payload).unwrap();
+        let encrypted = encrypt_record(&key, &payload).unwrap();
         assert_ne!(encrypted, serde_json::to_string(&payload).unwrap());
-        let decrypted = decrypt_alias(&key, &encrypted).unwrap();
+        let decrypted: AliasPayload = decrypt_record(&key, &encrypted).unwrap();
 
+        assert_eq!(decrypted.collection_id, DEFAULT_COLLECTION_ID);
+        assert_eq!(decrypted.collection_name, DEFAULT_COLLECTION_NAME);
         assert_eq!(decrypted.name, "gs");
         assert_eq!(decrypted.command, "git status");
         assert!(!decrypted.deleted);
         assert_eq!(decrypted.updated_at, 123);
+    }
+
+    #[test]
+    fn old_alias_payloads_default_to_shared_collection() {
+        let json = r#"{"name":"gs","command":"git status","deleted":false,"updated_at":123}"#;
+        let payload: AliasPayload = serde_json::from_str(json).unwrap();
+
+        assert_eq!(payload.collection_id, DEFAULT_COLLECTION_ID);
+        assert_eq!(payload.collection_name, DEFAULT_COLLECTION_NAME);
+    }
+
+    #[test]
+    fn collection_csv_parses_names() {
+        assert_eq!(
+            parse_collection_csv(Some("mac, development ,arch")).unwrap(),
+            vec![
+                "mac".to_owned(),
+                "development".to_owned(),
+                "arch".to_owned()
+            ]
+        );
+        assert!(parse_collection_csv(Some("bad name")).is_err());
+        assert!(parse_collection_csv(None).unwrap().is_empty());
     }
 
     #[test]
