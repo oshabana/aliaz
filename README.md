@@ -30,7 +30,7 @@
 
 ```sh
 $ aliaz add gs "git status"
-Added gs
+Added gs to shared
 
 $ aliaz init zsh
 Wrote ~/.config/aliaz/aliases.sh
@@ -143,7 +143,7 @@ Add an alias:
 
 ```sh
 aliaz add gs "git status"
-gs
+Added gs to shared
 ```
 
 List aliases:
@@ -167,15 +167,15 @@ aliaz init zsh
 ```
 
 After shell integration is active, mutating commands such as `add`, `edit`,
-`rm`, `migrate`, `import`, and `sync` refresh aliases automatically in the
-current shell.
+`rm`, `collection`, `migrate`, `import`, and `sync` refresh aliases
+automatically in the current shell.
 
 ## Commands
 
 ### Add an alias
 
 ```sh
-aliaz add <name> <command>
+aliaz add <name> <command> [--collection <collection>]
 ```
 
 Example:
@@ -189,20 +189,33 @@ Alias names may contain ASCII letters, numbers, `_`, `-`, and `.`.
 ### List aliases
 
 ```sh
-aliaz list
+aliaz list [--all] [--collection <collection>]
 ```
 
-Output is tab-separated:
+Default output is tab-separated effective aliases from active collections:
 
 ```text
 gs	git status
 ll	ls -lah
 ```
 
+Use `--all` to include collection and active state columns.
+
+### Select and run an alias
+
+```sh
+aliaz select [search text]
+```
+
+`select` opens a searchable list of effective aliases from active collections.
+Type to filter, move with the arrow keys, and press Enter to run the selected
+alias command. It works best after shell integration is active so the command
+runs in the current shell.
+
 ### Edit an alias
 
 ```sh
-aliaz edit <name> <command>
+aliaz edit <name> <command> [--collection <collection>]
 ```
 
 Example:
@@ -214,13 +227,37 @@ aliaz edit gs "git status --short"
 ### Delete an alias
 
 ```sh
-aliaz rm <name>
+aliaz rm <name> [--collection <collection>]
 ```
 
 `delete` is also accepted as an alias for `rm`:
 
 ```sh
 aliaz delete gs
+```
+
+### Collections
+
+Aliases live in collections. The `shared` collection is created automatically,
+is always active, and is the default for `add`, `edit`, `rm`, and `list`.
+Collection activation is local to each computer; sync shares collection
+definitions and aliases, but not which collections are active on a device.
+
+```sh
+aliaz collection add mac
+aliaz add pbcopy-path "pwd | pbcopy" --collection mac
+aliaz collection activate mac
+aliaz collection list
+aliaz list --all
+```
+
+If multiple active collections contain the same alias name, the later active
+collection wins. `shared` has the lowest priority, and `collection activate`
+appends collections after it.
+
+```sh
+aliaz collection deactivate mac
+aliaz collection move pbcopy-path --from mac --to shared
 ```
 
 ### Generate shell aliases
@@ -289,8 +326,8 @@ Import an exported file:
 aliaz import aliases.json
 ```
 
-Imports upsert aliases by name, so existing aliases with the same name are
-updated.
+Version 2 exports preserve collections. Version 1 exports import aliases into
+`shared`. Imports upsert aliases by collection and name.
 
 ## Sync
 
@@ -312,7 +349,13 @@ Log in on another machine:
 aliaz login --username ada
 ```
 
-Aliaz prompts for the password and recovery phrase.
+Aliaz prompts for the password and recovery phrase, pulls collections, and
+keeps only `shared` active unless you choose more collections interactively or
+pass them non-interactively:
+
+```sh
+aliaz login --username ada --collections mac,development
+```
 
 Run sync:
 
@@ -345,8 +388,8 @@ aliaz login --username ada --sync-url https://sync.example.com
 For non-interactive setup, pass secrets as options:
 
 ```sh
-aliaz register --username ada --password "$ALIAZ_PASSWORD"
-aliaz login --username ada --password "$ALIAZ_PASSWORD" --recovery-phrase "$ALIAZ_RECOVERY_PHRASE"
+aliaz register --username ada --password "$ALIAZ_PASSWORD" --collections mac
+aliaz login --username ada --password "$ALIAZ_PASSWORD" --recovery-phrase "$ALIAZ_RECOVERY_PHRASE" --collections mac
 ```
 
 Prefer interactive prompts on shared machines so secrets are not saved in shell
@@ -360,8 +403,8 @@ Check local state:
 aliaz status
 ```
 
-This reports the number of active aliases, pending sync records, and sync
-configuration.
+This reports the number of effective active aliases, collections, active
+collections, pending sync records, and sync configuration.
 
 Check local setup:
 
@@ -383,9 +426,10 @@ your aliases or sync data.
 
 ## Storage
 
-Aliaz stores aliases in a local SQLite database under the operating system's
-standard data directory. Sync configuration is stored under the standard config
-directory. Recovery phrases are stored in the OS credential store.
+Aliaz stores aliases, collections, and each device's active collection
+selection in a local SQLite database under the operating system's standard data
+directory. Sync configuration is stored under the standard config directory.
+Recovery phrases are stored in the OS credential store.
 
 For tests and isolated runs, these environment variables override storage:
 
