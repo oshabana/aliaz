@@ -57,10 +57,10 @@ menu_choice() {
   default="$2"
   shift 2
 
-  say "$prompt"
+  printf '%s\n' "$prompt" > /dev/tty
   i=1
   for option in "$@"; do
-    say "  $i) $option"
+    printf '  %s) %s\n' "$i" "$option" > /dev/tty
     i=$((i + 1))
   done
 
@@ -90,7 +90,7 @@ menu_choice() {
       fi
     done
 
-    say "aliaz install: invalid choice"
+    printf '%s\n' "aliaz install: invalid choice" > /dev/tty
   done
 }
 
