@@ -79,7 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | AL
 Install a specific version:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.2 sh
+curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.4 sh
 ```
 
 Install to a different directory:
@@ -343,6 +343,11 @@ Aliaz prompts for a password, creates a recovery phrase, stores the recovery
 phrase in the OS credential store, and prints the phrase once. Save it somewhere
 safe. Aliaz cannot recover encrypted aliases without it.
 
+On headless Linux systems without an OS credential service, Aliaz falls back to
+a private file-backed secret store under the Aliaz config directory. Set
+`ALIAZ_SECRET_HOME` to choose that directory explicitly, and keep that
+environment variable set for future sync commands if you use a custom path.
+
 Log in on another machine:
 
 ```sh
@@ -429,13 +434,16 @@ your aliases or sync data.
 Aliaz stores aliases, collections, and each device's active collection
 selection in a local SQLite database under the operating system's standard data
 directory. Sync configuration is stored under the standard config directory.
-Recovery phrases are stored in the OS credential store.
+Recovery phrases are stored in the OS credential store when available. If that
+store is unavailable, Aliaz uses a private file-backed secret store under the
+standard config directory.
 
 For tests and isolated runs, these environment variables override storage:
 
 ```sh
 ALIAZ_DATA_HOME=/tmp/aliaz-data
 ALIAZ_CONFIG_HOME=/tmp/aliaz-config
+ALIAZ_SECRET_HOME=/tmp/aliaz-secrets
 ```
 
 `ALIAS_TOOL_HOME` is also supported as a legacy data directory override.
@@ -458,6 +466,10 @@ account or `aliaz login` for an existing one.
 
 If sync reports a missing recovery phrase, log in again with the saved recovery
 phrase.
+
+If secret storage fails on headless Linux with a DBus or Secret Service error,
+install a Secret Service provider or set `ALIAZ_SECRET_HOME` to a private
+directory before running `aliaz login`.
 
 ## Development
 
