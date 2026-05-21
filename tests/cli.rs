@@ -1,8 +1,12 @@
 use assert_cmd::Command as AssertCommand;
 use predicates::prelude::*;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
+use std::thread;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 #[cfg(unix)]
@@ -30,6 +34,60 @@ fn copied_binary(home: &TempDir) -> PathBuf {
     }
 
     target
+}
+
+fn sync_server_for_login() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind sync server");
+    listener
+        .set_nonblocking(true)
+        .expect("set sync server nonblocking");
+    let base_url = format!(
+        "http://{}",
+        listener.local_addr().expect("sync server addr")
+    );
+
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            let (mut stream, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(error) => panic!("accept sync request: {error}"),
+            };
+
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut request_line = String::new();
+            reader
+                .read_line(&mut request_line)
+                .expect("read request line");
+            let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+
+            let (status, body) = match path {
+                "/v1/login" => (
+                    "200 OK",
+                    r#"{"user_id":"user-1","token":"token-1","latest_version":0}"#,
+                ),
+                "/v1/records?after=0" => ("200 OK", r#"{"latest_version":0,"records":[]}"#),
+                _ => ("404 Not Found", r#"{"error":"not found"}"#),
+            };
+
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .expect("write response");
+
+            if path == "/v1/records?after=0" {
+                return;
+            }
+        }
+    });
+
+    (base_url, handle)
 }
 
 #[test]
@@ -592,6 +650,62 @@ fn key_prints_the_stored_recovery_phrase() {
         .assert()
         .success()
         .stdout(predicate::eq("recovery phrase\n"));
+}
+
+#[test]
+fn login_uses_file_secret_home_when_configured() {
+    let home = TempDir::new().expect("temp home");
+    let secret_dir = home.path().join(".aliaz-secrets");
+    let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    let (sync_url, server) = sync_server_for_login();
+
+    let mut login = AssertCommand::cargo_bin("aliaz").expect("binary exists");
+    login
+        .env("HOME", home.path())
+        .env("ALIAS_TOOL_HOME", home.path())
+        .env("ALIAZ_CONFIG_HOME", home.path().join(".config"))
+        .env("ALIAZ_SECRET_HOME", &secret_dir)
+        .args([
+            "login",
+            "--username",
+            "ada",
+            "--password",
+            "password-1",
+            "--recovery-phrase",
+            phrase,
+            "--collections",
+            "shared",
+            "--sync-url",
+            &sync_url,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Logged in ada"));
+
+    server.join().expect("sync server finished");
+
+    let secret_path = secret_dir.join("user-1");
+    assert_eq!(fs::read_to_string(&secret_path).expect("secret"), phrase);
+
+    #[cfg(unix)]
+    assert_eq!(
+        fs::metadata(&secret_path)
+            .expect("secret metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+
+    let mut key = AssertCommand::cargo_bin("aliaz").expect("binary exists");
+    key.env("HOME", home.path())
+        .env("ALIAS_TOOL_HOME", home.path())
+        .env("ALIAZ_CONFIG_HOME", home.path().join(".config"))
+        .env("ALIAZ_SECRET_HOME", &secret_dir)
+        .args(["key"])
+        .assert()
+        .success()
+        .stdout(predicate::eq(format!("{phrase}\n")));
 }
 
 #[test]

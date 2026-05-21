@@ -18,6 +18,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Cursor, IsTerminal, Write};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tar::Archive;
@@ -1776,47 +1778,60 @@ fn remove_config() -> Result<()> {
 }
 
 fn store_recovery_phrase(user_id: &str, recovery_phrase: &str) -> Result<()> {
-    if let Some(secret_home) = test_secret_home() {
-        fs::create_dir_all(&secret_home)
-            .with_context(|| format!("failed to create {}", secret_home.display()))?;
-        fs::write(secret_home.join(secret_file_name(user_id)), recovery_phrase)
-            .context("failed to store test recovery phrase")?;
+    if let Some(secret_home) = configured_file_secret_home() {
+        store_file_recovery_phrase(&secret_home, user_id, recovery_phrase)?;
         return Ok(());
     }
 
-    Entry::new(KEYRING_SERVICE, user_id)?
-        .set_password(recovery_phrase)
-        .context("failed to store recovery phrase in OS credential store")?;
-    Ok(())
+    match Entry::new(KEYRING_SERVICE, user_id).and_then(|entry| entry.set_password(recovery_phrase))
+    {
+        Ok(()) => Ok(()),
+        Err(keyring_error) => {
+            let secret_home = default_file_secret_home()?;
+            store_file_recovery_phrase(&secret_home, user_id, recovery_phrase).with_context(
+                || {
+                    format!(
+                        "failed to store recovery phrase in OS credential store ({keyring_error}); file fallback also failed at {}",
+                        secret_home.display()
+                    )
+                },
+            )?;
+            eprintln!(
+                "aliaz: OS credential store unavailable; stored recovery phrase in file secret store at {}",
+                secret_home.display()
+            );
+            Ok(())
+        }
+    }
 }
 
 fn load_recovery_phrase(user_id: &str) -> Result<String> {
-    if let Some(secret_home) = test_secret_home() {
-        return fs::read_to_string(secret_home.join(secret_file_name(user_id)))
-            .context("recovery phrase is missing from test secret store");
+    if let Some(secret_home) = configured_file_secret_home() {
+        return load_file_recovery_phrase(&secret_home, user_id);
     }
 
-    Entry::new(KEYRING_SERVICE, user_id)?
-        .get_password()
-        .context("recovery phrase is missing from OS credential store")
+    match Entry::new(KEYRING_SERVICE, user_id).and_then(|entry| entry.get_password()) {
+        Ok(recovery_phrase) => Ok(recovery_phrase),
+        Err(keyring_error) => {
+            let secret_home = default_file_secret_home()?;
+            let path = file_secret_path(&secret_home, user_id);
+            if path.exists() {
+                return load_file_recovery_phrase(&secret_home, user_id);
+            }
+
+            Err(keyring_error).with_context(|| os_secret_store_hint("recovery phrase is missing"))
+        }
+    }
 }
 
 fn remove_recovery_phrase(user_id: &str) -> Result<()> {
-    if let Some(secret_home) = test_secret_home() {
-        let path = secret_home.join(secret_file_name(user_id));
-        match fs::remove_file(&path) {
-            Ok(()) => return Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => {
-                return Err(error).with_context(|| format!("failed to remove {}", path.display()));
-            }
-        }
+    if let Some(secret_home) = configured_file_secret_home() {
+        remove_file_recovery_phrase(&secret_home, user_id)?;
     }
 
-    match Entry::new(KEYRING_SERVICE, user_id)?.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(_) => Ok(()),
-    }
+    let _ = Entry::new(KEYRING_SERVICE, user_id).and_then(|entry| entry.delete_credential());
+    remove_file_recovery_phrase(&default_file_secret_home()?, user_id)?;
+    Ok(())
 }
 
 fn recovery_phrase_available(user_id: &str) -> bool {
@@ -2004,8 +2019,89 @@ fn repair_shell_integration(shell: &Shell, aliases: &[Alias]) -> Result<Vec<Stri
     Ok(messages)
 }
 
-fn test_secret_home() -> Option<PathBuf> {
-    std::env::var_os("ALIAZ_TEST_SECRET_HOME").map(PathBuf::from)
+fn configured_file_secret_home() -> Option<PathBuf> {
+    std::env::var_os("ALIAZ_SECRET_HOME")
+        .or_else(|| std::env::var_os("ALIAZ_TEST_SECRET_HOME"))
+        .map(PathBuf::from)
+}
+
+fn default_file_secret_home() -> Result<PathBuf> {
+    Ok(config_home()?.join("aliaz").join("secrets"))
+}
+
+fn store_file_recovery_phrase(
+    secret_home: &Path,
+    user_id: &str,
+    recovery_phrase: &str,
+) -> Result<()> {
+    fs::create_dir_all(secret_home)
+        .with_context(|| format!("failed to create {}", secret_home.display()))?;
+    restrict_secret_dir(secret_home)?;
+
+    let path = file_secret_path(secret_home, user_id);
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    restrict_secret_file(&path)?;
+    file.write_all(recovery_phrase.as_bytes())
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    file.flush()
+        .with_context(|| format!("failed to flush {}", path.display()))?;
+    Ok(())
+}
+
+fn load_file_recovery_phrase(secret_home: &Path, user_id: &str) -> Result<String> {
+    let path = file_secret_path(secret_home, user_id);
+    fs::read_to_string(&path).with_context(|| {
+        format!(
+            "recovery phrase is missing from file secret store at {}",
+            path.display()
+        )
+    })
+}
+
+fn remove_file_recovery_phrase(secret_home: &Path, user_id: &str) -> Result<()> {
+    let path = file_secret_path(secret_home, user_id);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
+    }
+}
+
+fn file_secret_path(secret_home: &Path, user_id: &str) -> PathBuf {
+    secret_home.join(secret_file_name(user_id))
+}
+
+#[cfg(unix)]
+fn restrict_secret_dir(secret_home: &Path) -> Result<()> {
+    fs::set_permissions(secret_home, fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("failed to protect {}", secret_home.display()))
+}
+
+#[cfg(not(unix))]
+fn restrict_secret_dir(_secret_home: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_secret_file(path: &Path) -> Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("failed to protect {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn restrict_secret_file(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+fn os_secret_store_hint(action: &str) -> String {
+    format!(
+        "{action} in OS credential store. On headless Linux, install a Secret Service provider or set ALIAZ_SECRET_HOME to a private directory for file-backed recovery phrase storage"
+    )
 }
 
 fn secret_file_name(user_id: &str) -> String {
