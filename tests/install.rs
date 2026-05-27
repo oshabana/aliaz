@@ -34,7 +34,7 @@ export ALIAZ_TEST_TTY_IN ALIAZ_TEST_TTY_OUT
 
 {functions}
 
-choice="$(menu_choice "aliaz install: set up encrypted sync" 1 skip register login)"
+choice="$(menu_choice "Aliaz encrypted sync" 1 skip register login)"
 printf 'choice=<%s>\n' "$choice"
 printf 'tty=<'
 cat "$ALIAZ_TEST_TTY_OUT"
@@ -65,7 +65,7 @@ printf '>\n'
         stdout
     );
     assert!(
-        stdout.contains("tty=<aliaz install: set up encrypted sync\n  1) skip\n  2) register\n  3) login\naliaz install: choice [1]: >"),
+        stdout.contains("tty=<Aliaz encrypted sync\n\n  1) Skip for now\n  2) Register a new account\n  3) Log in to an existing account\n\nChoice [1]: >"),
         "menu prompt was not written to tty output:\n{}",
         stdout
     );

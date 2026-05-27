@@ -49,32 +49,45 @@
         <section class="shell hero">
           <div>
             <div class="eyebrow"><span class="dot"></span> Installation</div>
-            <h1>Install and connect your shell.</h1>
+            <h1>Install Aliaz with confidence.</h1>
             <p class="lead">
-              The fastest path is the release installer. It downloads the
-              matching binary for your platform and installs it to
-              <code>~/.local/bin</code> by default. Interactive installs can
-              also wire Aliaz into zsh, bash, fish, or multiple shells.
+              The release installer detects your platform, downloads the
+              matching GitHub release asset, verifies its checksum, installs to
+              <code>~/.local/bin</code>, and can wire Aliaz into zsh, bash, or
+              fish before you leave the terminal.
             </p>
             <div class="actions">
               <a class="btn primary" href="#installer">Copy installer</a>
-              <a class="btn" href="../docs/">Quickstart</a>
+              <a class="btn" href="#trust">Trust details</a>
             </div>
           </div>
-          <aside class="hero-card">
-            <ul class="rule-list">
-              <li>
-                <code>01</code
-                ><span>No Rust required for release installs.</span>
-              </li>
-              <li>
-                <code>02</code
-                ><span>Shell setup can be interactive or scripted.</span>
-              </li>
-              <li>
-                <code>03</code><span>Sync setup can start during install.</span>
-              </li>
-            </ul>
+          <aside class="install-preview terminal" aria-label="Installer preview">
+            <div class="terminal-head">
+              <div class="lights"><i></i><i></i><i></i></div>
+              <span>install.sh</span>
+            </div>
+            <pre><code>Aliaz installer
+
+System
+  Platform     aarch64-apple-darwin
+  Version      latest
+  Install dir  ~/.local/bin
+
+Download
+  OK  aliaz-aarch64-apple-darwin.tar.gz
+  OK  checksums.txt
+  OK  checksum verified
+
+Install
+  OK  copied to ~/.local/bin/aliaz
+  OK  binary verified
+
+Aliaz is installed
+
+  Binary   ~/.local/bin/aliaz
+  Shell    zsh configured
+  Sync     Skipped
+  Verify   aliaz --help</code></pre>
           </aside>
         </section>
 
@@ -82,6 +95,7 @@
           <aside class="side-nav" aria-label="Install sections">
             <div class="side-label">Install</div>
             <a class="active" href="#installer">Release installer</a>
+            <a href="#trust">Trust details</a>
             <a href="#options">Installer options</a>
             <a href="#source">From source</a>
             <a href="#verify">Verify</a>
@@ -90,22 +104,62 @@
           <article class="content">
             <section id="installer">
               <div class="kicker">Release installer</div>
-              <h2>One command for macOS and Linux.</h2>
+              <h2>One command. A verified binary. A clean finish.</h2>
               <p>
-                This is the primary install path from the README. The script
-                chooses the release asset for the current platform and installs
-                the binary. When a terminal is available, it can ask which
-                shells to configure.
+                This is the primary install path. It chooses the release asset
+                for the current macOS or Linux platform, verifies the checksum,
+                installs the binary, and confirms that <code>aliaz</code> runs
+                before optional shell and sync setup.
               </p>
-              <div class="cmd-list">
-                <div class="cmd"><code>curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | sh</code></div>
-                <div class="cmd"><code>aliaz --help</code></div>
+              <div class="install-command">
+                <div>
+                  <span class="command-label">Recommended</span>
+                  <div class="cmd"><code>curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | sh</code></div>
+                </div>
+                <div class="install-facts" aria-label="Installer facts">
+                  <span>No Rust required</span>
+                  <span>Checksum verified</span>
+                  <span>Installs to ~/.local/bin</span>
+                </div>
+              </div>
+            </section>
+
+            <section id="trust">
+              <div class="kicker">Trust details</div>
+              <h2>Transparent steps, no mystery installer.</h2>
+              <p>
+                The installer is a small shell script in the repository. The
+                trust model is intentionally inspectable: release assets and
+                checksums come from GitHub releases, the binary is smoke-tested
+                after installation, and uninstall keeps your local alias data.
+              </p>
+              <div class="trust-grid">
+                <div class="trust-item">
+                  <span>01</span>
+                  <strong>Platform-matched asset</strong>
+                  <p>Downloads the archive for macOS or Linux on arm64 or x86_64.</p>
+                </div>
+                <div class="trust-item">
+                  <span>02</span>
+                  <strong>Checksum verification</strong>
+                  <p>Checks the archive against <code>checksums.txt</code> before extracting.</p>
+                </div>
+                <div class="trust-item">
+                  <span>03</span>
+                  <strong>Binary smoke test</strong>
+                  <p>Runs <code>aliaz --help</code> before reporting the install complete.</p>
+                </div>
+                <div class="trust-item">
+                  <span>04</span>
+                  <strong>Reversible setup</strong>
+                  <p><code>aliaz uninstall</code> removes shell integration and the binary while keeping your data.</p>
+                </div>
               </div>
             </section>
 
             <section id="options">
               <div class="kicker">Options</div>
-              <h2>Script shell setup, sync setup, updates, version, or destination.</h2>
+              <h2>Script the parts you already know.</h2>
               <div class="grid-2">
                 <div class="panel">
                   <h3>Configure shells</h3>
@@ -195,6 +249,7 @@
           <aside class="toc" aria-label="On this page">
             <div class="side-label">On this page</div>
             <a href="#installer">Release installer</a>
+            <a href="#trust">Trust details</a>
             <a href="#options">Options</a>
             <a href="#source">Source</a>
             <a href="#verify">Verify</a>

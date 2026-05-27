@@ -10,9 +10,55 @@ say() {
   printf '%s\n' "$*"
 }
 
+say_blank() {
+  printf '\n'
+}
+
 fail() {
   say "aliaz install: $*" >&2
   exit 1
+}
+
+display_path() {
+  path="$1"
+  if [ -n "${HOME:-}" ]; then
+    case "$path" in
+      "$HOME")
+        printf '%s\n' "~"
+        return 0
+        ;;
+      "$HOME"/*)
+        printf '~/%s\n' "${path#"$HOME"/}"
+        return 0
+        ;;
+    esac
+  fi
+  printf '%s\n' "$path"
+}
+
+choice_label() {
+  case "$1" in
+    skip)
+      printf '%s\n' "Skip for now"
+      ;;
+    register)
+      printf '%s\n' "Register a new account"
+      ;;
+    login)
+      printf '%s\n' "Log in to an existing account"
+      ;;
+    *)
+      printf '%s\n' "$1"
+      ;;
+  esac
+}
+
+status_ok() {
+  printf '  OK  %s\n' "$*"
+}
+
+status_note() {
+  printf '  ->  %s\n' "$*"
 }
 
 need_cmd() {
@@ -57,15 +103,16 @@ menu_choice() {
   default="$2"
   shift 2
 
-  printf '%s\n' "$prompt" > /dev/tty
+  printf '%s\n\n' "$prompt" > /dev/tty
   i=1
   for option in "$@"; do
-    printf '  %s) %s\n' "$i" "$option" > /dev/tty
+    printf '  %s) %s\n' "$i" "$(choice_label "$option")" > /dev/tty
     i=$((i + 1))
   done
+  printf '\n' > /dev/tty
 
   while :; do
-    printf '%s' "aliaz install: choice [$default]: " > /dev/tty
+    printf '%s' "Choice [$default]: " > /dev/tty
     IFS= read -r answer < /dev/tty || answer=""
     if [ -z "$answer" ]; then
       answer="$default"
@@ -90,7 +137,7 @@ menu_choice() {
       fi
     done
 
-    printf '%s\n' "aliaz install: invalid choice" > /dev/tty
+    printf '%s\n' "Invalid choice. Enter a number or option name." > /dev/tty
   done
 }
 
@@ -139,9 +186,9 @@ verify_checksum() {
     fail "checksum for $archive was not found"
 
   if need_cmd sha256sum; then
-    sha256sum -c "$checksum_file"
+    sha256sum -c "$checksum_file" >/dev/null
   elif need_cmd shasum; then
-    shasum -a 256 -c "$checksum_file"
+    shasum -a 256 -c "$checksum_file" >/dev/null
   else
     say "aliaz install: sha256sum or shasum not found; skipping checksum verification"
   fi
@@ -212,6 +259,7 @@ shells_from_selection() {
 
 configure_shells() {
   shells="${ALIAZ_INSTALL_SHELLS:-}"
+  configured_shells=""
 
   if [ -z "$shells" ]; then
     if has_tty; then
@@ -228,16 +276,20 @@ configure_shells() {
           default_choice=3
           ;;
       esac
-      say "aliaz install: choose shell integration"
-      say "  1) zsh"
+      say_blank
+      say "Shell integration"
+      say
+      say "  1) zsh  recommended"
       say "  2) bash"
       say "  3) fish"
       say "  4) all"
       say "  5) skip"
-      say "  Press Enter for your current shell ($current_shell)"
+      say
+      say "Press Enter for your current shell: $current_shell"
+      say
 
       while :; do
-        printf '%s' "aliaz install: choice [$default_choice]: " > /dev/tty
+        printf '%s' "Choice [$default_choice]: " > /dev/tty
         IFS= read -r answer < /dev/tty || answer=""
         if [ -z "$answer" ]; then
           answer="$default_choice"
@@ -248,17 +300,17 @@ configure_shells() {
           break
         fi
 
-        say "aliaz install: invalid choice"
+        say "Invalid choice. Enter one or more numbers, shell names, all, or skip."
       done
     else
-      say "aliaz install: shell integration skipped; set ALIAZ_INSTALL_SHELLS to configure non-interactively"
+      status_note "shell integration skipped; set ALIAZ_INSTALL_SHELLS to configure non-interactively"
       return 0
     fi
   fi
 
   case "$shells" in
     skip | none | no)
-      say "aliaz install: shell integration skipped"
+      status_note "shell integration skipped"
       return 0
       ;;
     all)
@@ -269,8 +321,13 @@ configure_shells() {
   for shell in $shells; do
     case "$shell" in
       zsh | bash | fish)
-        say "aliaz install: configuring $shell"
+        status_note "configuring $shell"
         "$install_dir/aliaz" init "$shell"
+        if [ -z "$configured_shells" ]; then
+          configured_shells="$shell"
+        else
+          configured_shells="$configured_shells $shell"
+        fi
         ;;
       *)
         fail "unsupported shell for integration: $shell"
@@ -281,13 +338,15 @@ configure_shells() {
 
 setup_sync() {
   mode="${ALIAZ_INSTALL_SYNC:-}"
+  sync_summary="Skipped"
 
   if [ -z "$mode" ]; then
     if ! has_tty; then
       return 0
     fi
 
-    mode="$(menu_choice "aliaz install: set up encrypted sync" 1 skip register login)"
+    say_blank
+    mode="$(menu_choice "Aliaz encrypted sync" 1 skip register login)"
   fi
 
   case "$mode" in
@@ -312,6 +371,7 @@ setup_sync() {
 
   [ -n "$username" ] || fail "username is required for sync setup"
   "$install_dir/aliaz" "$mode" --username "$username"
+  sync_summary="$mode as $username"
 }
 
 target="$(platform_target)"
@@ -328,33 +388,63 @@ fi
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/aliaz-install.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 
-say "aliaz install: downloading $archive"
+say "Aliaz installer"
+say_blank
+say "System"
+printf '  %-12s %s\n' "Platform" "$target"
+printf '  %-12s %s\n' "Version" "$version"
+printf '  %-12s %s\n' "Install dir" "$(display_path "$install_dir")"
+say_blank
+say "Download"
 download "$base_url/$archive" "$tmp_dir/$archive"
+status_ok "$archive"
 download "$base_url/checksums.txt" "$tmp_dir/checksums.txt"
+status_ok "checksums.txt"
 
 (
   cd "$tmp_dir"
   verify_checksum "$archive" "checksums.txt" "$archive.sha256"
   tar -xzf "$archive"
 )
+status_ok "checksum verified"
 
 [ -f "$tmp_dir/aliaz" ] || fail "release archive did not contain aliaz"
 
+say_blank
+say "Install"
 mkdir -p "$install_dir"
 cp "$tmp_dir/aliaz" "$install_dir/aliaz"
 chmod 755 "$install_dir/aliaz"
+status_ok "copied to $(display_path "$install_dir")/aliaz"
 
 "$install_dir/aliaz" --help >/dev/null 2>&1 ||
   fail "installed binary did not run: $install_dir/aliaz"
-
-say "aliaz install: installed $install_dir/aliaz"
+status_ok "binary verified"
 
 configure_shells
 setup_sync
 
+path_note=""
 case ":$PATH:" in
   *":$install_dir:"*) ;;
   *)
-    say "aliaz install: add $install_dir to PATH to run aliaz from any shell"
+    path_note="Add $(display_path "$install_dir") to PATH to run aliaz from any shell."
     ;;
 esac
+
+say_blank
+say "Aliaz is installed"
+say_blank
+printf '  %-8s %s\n' "Binary" "$(display_path "$install_dir")/aliaz"
+if [ -n "$configured_shells" ]; then
+  printf '  %-8s %s configured\n' "Shell" "$configured_shells"
+else
+  printf '  %-8s %s\n' "Shell" "Not configured"
+fi
+printf '  %-8s %s\n' "Sync" "$sync_summary"
+printf '  %-8s %s\n' "Verify" "aliaz --help"
+
+if [ -n "$path_note" ]; then
+  say_blank
+  status_note "$path_note"
+fi
