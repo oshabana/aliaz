@@ -177,6 +177,20 @@ platform_target() {
   esac
 }
 
+platform_name() {
+  case "$(uname -s)" in
+    Darwin) os_label="macOS" ;;
+    Linux) os_label="Linux" ;;
+    *) os_label="$(uname -s)" ;;
+  esac
+  case "$(uname -m)" in
+    arm64 | aarch64) arch_label="ARM64" ;;
+    x86_64 | amd64) arch_label="x86_64" ;;
+    *) arch_label="$(uname -m)" ;;
+  esac
+  printf '%s %s\n' "$os_label" "$arch_label"
+}
+
 verify_checksum() {
   archive="$1"
   checksums="$2"
@@ -264,6 +278,13 @@ configure_shells() {
   if [ -z "$shells" ]; then
     if has_tty; then
       current_shell="$(default_shell)"
+      detected_shell=""
+      case "$(basename "${SHELL:-}")" in
+        zsh | bash | fish)
+          detected_shell="$(basename "$SHELL")"
+          ;;
+      esac
+
       default_choice=1
       case "$current_shell" in
         zsh)
@@ -276,16 +297,27 @@ configure_shells() {
           default_choice=3
           ;;
       esac
+
       say_blank
       say "Shell integration"
       say
-      say "  1) zsh  recommended"
-      say "  2) bash"
-      say "  3) fish"
+      i=1
+      for shell_option in zsh bash fish; do
+        if [ "$shell_option" = "$detected_shell" ]; then
+          say "  $i) $shell_option  (your current shell)"
+        else
+          say "  $i) $shell_option"
+        fi
+        i=$((i + 1))
+      done
       say "  4) all"
       say "  5) skip"
       say
-      say "Press Enter for your current shell: $current_shell"
+      if [ -n "$detected_shell" ]; then
+        say "Press Enter to configure $detected_shell (your current shell)."
+      else
+        say "Could not detect your shell; press Enter for zsh."
+      fi
       say
 
       while :; do
@@ -391,7 +423,8 @@ trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 say "Aliaz installer"
 say_blank
 say "System"
-printf '  %-12s %s\n' "Platform" "$target"
+printf '  %-12s %s\n' "Platform" "$(platform_name)"
+printf '  %-12s %s\n' "Target" "$target"
 printf '  %-12s %s\n' "Version" "$version"
 printf '  %-12s %s\n' "Install dir" "$(display_path "$install_dir")"
 say_blank

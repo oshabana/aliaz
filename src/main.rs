@@ -100,7 +100,7 @@ enum Commands {
     },
     Register {
         #[arg(long)]
-        username: String,
+        username: Option<String>,
         #[arg(long)]
         password: Option<String>,
         #[arg(long)]
@@ -110,7 +110,7 @@ enum Commands {
     },
     Login {
         #[arg(long)]
-        username: String,
+        username: Option<String>,
         #[arg(long)]
         password: Option<String>,
         #[arg(long)]
@@ -520,6 +520,7 @@ fn main() -> Result<()> {
             collections,
             sync_url,
         } => {
+            let username = prompt_username_if_missing(username)?;
             let password = prompt_secret_if_missing(password, "Password: ")?;
             let phrase = Mnemonic::generate_in(Language::English, 24)?.to_string();
             let response = account_request(&sync_url, "register", &username, &password)?;
@@ -546,6 +547,7 @@ fn main() -> Result<()> {
             collections,
             sync_url,
         } => {
+            let username = prompt_username_if_missing(username)?;
             let password = prompt_secret_if_missing(password, "Password: ")?;
             let recovery_phrase = prompt_secret_if_missing(recovery_phrase, "Recovery phrase: ")?;
             Mnemonic::parse_in_normalized(Language::English, &recovery_phrase)
@@ -553,7 +555,7 @@ fn main() -> Result<()> {
             let response = account_request(&sync_url, "login", &username, &password)?;
             store_recovery_phrase(&response.user_id, &recovery_phrase)?;
             let mut config = login_config(&sync_url, &username, response);
-            let _ = sync_aliases(&store, &mut config, &recovery_phrase)?;
+            let result = sync_aliases(&store, &mut config, &recovery_phrase)?;
             save_config(&config)?;
             let collections = match collections {
                 Some(value) => parse_collection_csv(Some(&value))?,
@@ -561,6 +563,10 @@ fn main() -> Result<()> {
             };
             store.activate_collections(&collections)?;
             println!("Logged in {username}");
+            println!(
+                "Synced: pulled {}, pushed {}, latest version {}",
+                result.pulled, result.pushed, config.latest_version
+            );
         }
         Commands::Key => {
             let config = load_config()?.ok_or_else(|| {
@@ -1678,6 +1684,31 @@ fn prompt_secret_if_missing(value: Option<String>, prompt: &str) -> Result<Strin
     match value {
         Some(value) => Ok(value),
         None => rpassword::prompt_password(prompt).context("failed to read secret from terminal"),
+    }
+}
+
+fn prompt_username_if_missing(value: Option<String>) -> Result<String> {
+    if let Some(value) = value {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_owned());
+        }
+    }
+    if !io::stdin().is_terminal() {
+        bail!("username is required; pass --username <name>");
+    }
+    loop {
+        print!("Username: ");
+        io::stdout().flush()?;
+        let mut answer = String::new();
+        if io::stdin().read_line(&mut answer)? == 0 {
+            bail!("username is required; pass --username <name>");
+        }
+        let name = answer.trim();
+        if !name.is_empty() {
+            return Ok(name.to_owned());
+        }
+        println!("Username cannot be empty.");
     }
 }
 
