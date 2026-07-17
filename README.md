@@ -79,7 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | AL
 Install a specific version:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.4 sh
+curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.5 sh
 ```
 
 Install to a different directory:
@@ -339,9 +339,10 @@ Register a new sync account:
 aliaz register --username ada
 ```
 
-Aliaz prompts for a password, creates a recovery phrase, stores the recovery
-phrase in the OS credential store, and prints the phrase once. Save it somewhere
-safe. Aliaz cannot recover encrypted aliases without it.
+Omit `--username` to be prompted for it. Aliaz prompts for a password, creates a
+recovery phrase, stores the recovery phrase in the OS credential store, and
+prints the phrase once. Save it somewhere safe. Aliaz cannot recover encrypted
+aliases without it.
 
 On headless Linux systems without an OS credential service, Aliaz falls back to
 a private file-backed secret store under the Aliaz config directory. Set
@@ -354,9 +355,9 @@ Log in on another machine:
 aliaz login --username ada
 ```
 
-Aliaz prompts for the password and recovery phrase, pulls collections, and
-keeps only `shared` active unless you choose more collections interactively or
-pass them non-interactively:
+Aliaz prompts for the password and recovery phrase (and the username if you omit
+`--username`), pulls collections, and keeps only `shared` active unless you
+choose more collections interactively or pass them non-interactively:
 
 ```sh
 aliaz login --username ada --collections mac,development

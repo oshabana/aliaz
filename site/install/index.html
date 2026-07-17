@@ -6,7 +6,7 @@
     <title>Install Aliaz</title>
     <meta
       name="description"
-      content="Install Aliaz from source today, with release installer notes for future tagged releases."
+      content="Install Aliaz with a single command: the release installer detects your platform, verifies the checksum, installs to ~/.local/bin, and can wire up zsh, bash, or fish."
     />
     <link
       rel="icon"
@@ -69,7 +69,8 @@
             <pre><code>Aliaz installer
 
 System
-  Platform     aarch64-apple-darwin
+  Platform     macOS ARM64
+  Target       aarch64-apple-darwin
   Version      latest
   Install dir  ~/.local/bin
 
@@ -201,7 +202,7 @@ Aliaz is installed
                   <h3>Install a version</h3>
                   <p>Set <code>ALIAZ_VERSION</code> before the shell script.</p>
                   <div class="cmd-list">
-                    <div class="cmd"><code>curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.2 sh</code></div>
+                    <div class="cmd"><code>curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.5 sh</code></div>
                   </div>
                 </div>
                 <div class="panel">
