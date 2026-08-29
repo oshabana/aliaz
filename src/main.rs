@@ -1655,6 +1655,11 @@ fn validate_name(name: &str) -> Result<()> {
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'));
     if !valid {
+        if name.contains(char::is_whitespace) {
+            bail!(
+                "invalid alias name: {name}; alias names must be one word, because the shell only expands the first word of a command"
+            );
+        }
         bail!("invalid alias name: {name}");
     }
     Ok(())
