@@ -29,6 +29,7 @@ const DEFAULT_SYNC_URL: &str = "https://aliaz-sync.still-silence-6a39.workers.de
 const KEYRING_SERVICE: &str = "dev.aliaz.cli";
 const DEFAULT_COLLECTION_NAME: &str = "shared";
 const DEFAULT_COLLECTION_ID: &str = "collection:shared";
+const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Parser)]
 #[command(name = "aliaz")]
@@ -907,6 +908,13 @@ impl Store {
         }
 
         let conn = Connection::open(path)?;
+        let schema_version: i64 =
+            conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if schema_version > SCHEMA_VERSION {
+            bail!(
+                "this alias database was written by a newer aliaz (schema v{schema_version}, this build understands v{SCHEMA_VERSION}); run `aliaz update`"
+            );
+        }
         conn.execute_batch(
             "
             PRAGMA foreign_keys = ON;
@@ -954,6 +962,7 @@ impl Store {
         migrate_alias_table(&conn)?;
         migrate_alias_collections(&conn)?;
         ensure_shared_collection(&conn)?;
+        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
 
         Ok(Self { conn })
     }
