@@ -70,3 +70,19 @@ printf '>\n'
         stdout
     );
 }
+
+#[test]
+fn tty_probe_requires_opening_the_terminal_in_a_detached_session() {
+    let installer =
+        fs::read_to_string(format!("{}/install.sh", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let start = installer.find("has_tty() {").unwrap();
+    let end = installer[start..].find("\n}").unwrap() + start + 2;
+    // Python starts a new session so /dev/tty exists but has no controlling TTY.
+    let script = format!("{}\nif has_tty; then exit 1; fi\n", &installer[start..end]);
+    let output = Command::new("python3").args(["-c", "import subprocess,sys; p=subprocess.run(['sh','-c',sys.argv[1]], start_new_session=True, capture_output=True); sys.exit(p.returncode)", &script]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "detached tty probe reported a terminal"
+    );
+    assert!(output.stderr.is_empty());
+}

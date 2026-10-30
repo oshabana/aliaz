@@ -79,7 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | AL
 Install a specific version:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.1.5 sh
+curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_VERSION=v0.2.0 sh
 ```
 
 Install to a different directory:
@@ -96,8 +96,10 @@ aliaz --help
 
 The installer can also start sync setup:
 
+The demo username `testuser` is not a provisioned account on the hosted service.
+
 ```sh
-curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SYNC=login ALIAZ_SYNC_USERNAME=ada sh
+curl -fsSL https://raw.githubusercontent.com/oshabana/aliaz/main/install.sh | ALIAZ_INSTALL_SYNC=login ALIAZ_SYNC_USERNAME=testuser sh
 ```
 
 Keep an installed binary current:
@@ -137,45 +139,94 @@ cargo run -- --help
 cargo run -- add gs "git status"
 ```
 
-## Quick Start
+## Find and reuse a command
 
-Add an alias:
-
-```sh
-aliaz add gs "git status"
-Added gs to shared
-```
-
-List aliases:
+Save a command without quoting it for the shell:
 
 ```sh
-aliaz list
+aliaz save
 ```
 
-Generate aliases for your shell:
+Aliaz opens your editor, then asks for a name, an optional description, tags,
+and a collection. Quotes, pipelines, and multiple lines stay in the command.
+Set `VISUAL` or `EDITOR` to choose your editor. To save your previous command
+without typing it again, enable shell integration and run `aliaz save --last`.
+It checks the last 50 available history entries and skips Aliaz management
+commands. It does not enable or change shell history recording.
 
-```sh
-aliaz generate zsh
-aliaz generate bash
-aliaz generate fish
-```
-
-If you skipped shell setup during installation, install it later:
+Install integration for the shell you use, then open a new shell:
 
 ```sh
 aliaz init zsh
+# Or: aliaz init bash / aliaz init fish
 ```
 
-After shell integration is active, mutating commands such as `add`, `edit`,
-`rm`, `collection`, `migrate`, `import`, and `sync` refresh aliases
-automatically in the current shell.
+Press **Ctrl-X, then Ctrl-A** to find a command. Search by name, command,
+description, tags, or collection. Enter opens the full command for review. Confirm to place it
+in your shell's editable command line. It runs only when you press Enter on
+that line. Escape cancels and keeps the line and cursor you had before.
+Favorites appear first, followed by recently selected commands.
+
+Bash 3.2 supports aliases, review, copying, and explicit running. Editable-line
+insertion needs newer Bash; on Bash 3.2 Aliaz explains the copy fallback and
+leaves the insertion shortcut unbound.
+
+Typing `aliaz` or `aliaz select` also opens the picker. With zsh integration,
+it queues the selection at the next prompt. With fish integration, it replaces
+the editable command line. In bash, use Ctrl-X then Ctrl-A for insertion; typing `aliaz`
+prints the selected command for copying. Without integration, the picker also
+prints the command. `aliaz` without a terminal prints help.
+
+To run a selection immediately, choose that action explicitly:
+
+```sh
+aliaz select --run
+```
+
+With integration, this runs in the current shell, so `cd` and environment
+changes persist. Without integration, it runs in a child shell.
+
+### Choose a keyboard shortcut
+
+Aliaz leaves Ctrl-R and Up unchanged. It uses Ctrl-X then Ctrl-A only when that
+sequence is unbound. If the key is already assigned, Aliaz explains that and keeps the
+existing binding. Choose an unused key before loading integration:
+
+```sh
+# bash or zsh: Alt-X
+export ALIAZ_PICKER_KEY='\ex'
+
+# fish: Alt-X
+set -gx ALIAZ_PICKER_KEY \ex
+```
+
+Use `ALIAZ_PICKER_KEY=off` to disable automatic binding (`set -gx
+ALIAZ_PICKER_KEY off` in fish). Open a new shell after changing this setting.
+Existing bindings are never replaced automatically. Terminal and desktop
+shortcuts may also reserve a key; choose another sequence if the default does
+not reach your shell.
+
+### Save from a script
+
+Existing CLI commands remain available:
+
+```sh
+aliaz add gs 'git status' --description 'Check the working tree' --tags git,status
+aliaz list
+aliaz select --first --print-command 'working tree'
+```
+
+`list` keeps its tab-separated name and command output. `select --first
+--print-command` prints the selected command followed by one newline, and never
+runs it. `select --first` now reviews or prints a command; add `--run` to scripts
+that intentionally executed a selection before this release.
 
 ## Commands
 
 ### Add an alias
 
 ```sh
-aliaz add <name> <command> [--collection <collection>]
+aliaz add <name> <command> [--collection <collection>] [--description <text>] [--tags <tags>] [--favorite] [--replace]
 ```
 
 Example:
@@ -184,7 +235,8 @@ Example:
 aliaz add ll "ls -lah"
 ```
 
-Alias names may contain ASCII letters, numbers, `_`, `-`, and `.`.
+Alias names may contain ASCII letters, numbers, `_`, `-`, and `.`, but cannot
+start with `-`. The name `aliaz` and the prefix `__aliaz_` are reserved for shell integration.
 
 ### List aliases
 
@@ -201,16 +253,38 @@ ll	ls -lah
 
 Use `--all` to include collection and active state columns.
 
-### Select and run an alias
+### Find a saved command
 
 ```sh
 aliaz select [search text]
+aliaz select --run [search text]
 ```
 
-`select` opens a searchable list of effective aliases from active collections.
-Type to filter, move with the arrow keys, and press Enter to run the selected
-alias command. It works best after shell integration is active so the command
-runs in the current shell.
+The default action reviews the selection. Use the shell shortcut to insert it
+for editing. `--run` runs the selection explicitly. Only effective aliases from
+active collections appear, so a higher-priority collection's command wins when
+names overlap. `list --all` still shows the underlying collections.
+
+### Add purpose and favorites
+
+```sh
+aliaz describe gs --description 'Check the working tree' --tags git,status
+aliaz describe gs
+aliaz favorite gs
+aliaz favorite gs --off
+aliaz list --details
+```
+
+`describe` without changes shows the command and its details. An empty
+`--description ''` or `--tags ''` clears that field. Use `--collection` when a
+name exists in more than one collection. Favorites sync with command details
+when the sync service supports them.
+Until that support is installed, details stay saved locally. Recent selections
+stay on this computer. Canceled selections do not change recent ordering.
+
+Adding a different command under an existing name requires `add --replace`.
+Aliaz shows the old and new command. `edit` is also an explicit replacement and
+shows both commands before saving.
 
 ### Edit an alias
 
@@ -304,7 +378,19 @@ aliaz migrate
 ```
 
 Only lines that start with `alias ` are imported. Commented aliases and shell
-functions are ignored.
+functions are ignored. The source file is never changed.
+
+Preview additions, replacements, and skipped entries without applying them:
+
+```sh
+aliaz migrate --from ~/.zshrc --preview
+aliaz migrate --from ~/.zshrc --preview --replace
+```
+
+Existing names are skipped unless `--replace` is supplied. Interactive imports
+ask before applying the displayed preview. `--yes` applies without that prompt.
+Noninteractive imports apply without prompting, keeping the script path usable;
+use `--preview` for a dry run and `--replace` to permit replacements.
 
 ## Import and Export
 
@@ -326,17 +412,65 @@ Import an exported file:
 aliaz import aliases.json
 ```
 
-Version 2 exports preserve collections. Version 1 exports import aliases into
-`shared`. Imports upsert aliases by collection and name.
+Preview first, then apply when the changes are right:
+
+```sh
+aliaz import aliases.json --preview --replace
+aliaz import aliases.json --replace --yes
+```
+
+Imports match collection and name. Existing entries are skipped unless
+`--replace` is supplied. Interactive imports confirm the preview unless `--yes`
+is supplied; noninteractive imports apply without prompting. A failed import
+leaves the command library unchanged.
+
+Version 3 exports include descriptions, tags, and favorites. Version 2 exports
+preserve collections. Version 1 exports default to `shared`. Imports accept all
+three versions; older exports preserve any command details already saved here.
+Older Aliaz releases cannot import version 3 exports. Recent selections and undo
+history stay on this computer and are not included in an export.
+
+## Recover a changed command
+
+```sh
+aliaz history
+aliaz undo
+aliaz undo 3
+```
+
+`undo` restores the most recent change. A number restores that specific change,
+including its description, tags, favorite, and collection. A single import is
+one change. Restoring a deletion keeps the command's identity. Undo leaves
+unrelated commands alone and refuses to overwrite a newer change to the same
+command. Inspect `history`, then undo that newer change first. Recovery changes
+are included in the next sync; undo history itself stays local.
+
+Inspect commands retained after sync conflicts:
+
+```sh
+aliaz conflicts
+aliaz restore <backup-id>
+```
+
+New backups record the original command, collection, and details. Restoring
+without destination options revives the original command identity. Supplying
+`--collection` or `--name` copies the backup to the selected destination instead.
+A replacement requires `--replace` and shows the old and new command. Older backups did not
+record reliable collection identity or command details. For those, supply an
+explicit destination with `--collection <collection> --name <name>`; Aliaz never
+guesses from the displayed label. The backup remains available after restoring.
 
 ## Sync
 
 Sync is optional. Local alias management works without an account.
 
+The `testuser` examples use the standard development account name. Seeded
+passwords apply only to the local instance described under Test accounts.
+
 Register a new sync account:
 
 ```sh
-aliaz register --username ada
+aliaz register --username testuser
 ```
 
 Omit `--username` to be prompted for it. Aliaz prompts for a password, creates a
@@ -352,7 +486,7 @@ environment variable set for future sync commands if you use a custom path.
 Log in on another machine:
 
 ```sh
-aliaz login --username ada
+aliaz login --username testuser
 ```
 
 Aliaz prompts for the password and recovery phrase (and the username if you omit
@@ -360,7 +494,7 @@ Aliaz prompts for the password and recovery phrase (and the username if you omit
 choose more collections interactively or pass them non-interactively:
 
 ```sh
-aliaz login --username ada --collections mac,development
+aliaz login --username testuser --collections mac,development
 ```
 
 Run sync:
@@ -387,15 +521,15 @@ For the privacy and threat model behind sync, see
 Use a custom sync server:
 
 ```sh
-aliaz register --username ada --sync-url https://sync.example.com
-aliaz login --username ada --sync-url https://sync.example.com
+aliaz register --username testuser --sync-url https://sync.example.com
+aliaz login --username testuser --sync-url https://sync.example.com
 ```
 
 For non-interactive setup, pass secrets as options:
 
 ```sh
-aliaz register --username ada --password "$ALIAZ_PASSWORD" --collections mac
-aliaz login --username ada --password "$ALIAZ_PASSWORD" --recovery-phrase "$ALIAZ_RECOVERY_PHRASE" --collections mac
+aliaz register --username testuser --password "$ALIAZ_PASSWORD" --collections mac
+aliaz login --username testuser --password "$ALIAZ_PASSWORD" --recovery-phrase "$ALIAZ_RECOVERY_PHRASE" --collections mac
 ```
 
 Prefer interactive prompts on shared machines so secrets are not saved in shell
@@ -474,11 +608,57 @@ directory before running `aliaz login`.
 
 ## Development
 
-Run tests:
+### Test accounts
+
+Aliaz logs in by username only, so development login names omit the email domain.
+The dev seed provisions the default admin and test accounts in isolated local D1
+storage. They are available only after the seed succeeds. Sync does not use email
+verification or MFA. The hosted sync service is not seeded.
+
+| Account | Username | Password |
+| --- | --- | --- |
+| admin | adminuser | Adminuser123! |
+| test | testuser | Testuser123! |
+
+The account labels do not grant different sync permissions.
+
+Install the repository dependencies and apply the existing migrations to the
+isolated local database, then seed it:
 
 ```sh
-cargo test
+pnpm install
+pnpm exec wrangler d1 migrations apply aliaz-sync --local --persist-to .wrangler/test-accounts
+NODE_ENV=development CONFIRM_LOCAL_TEST_ACCOUNTS=aliaz pnpm seed:test-accounts
 ```
+
+The seed always uses `--local` and `.wrangler/test-accounts`. It refuses
+production mode and existing matching accounts that were not created by the
+seed. Rerunning refreshes only the seeded passwords and preserves vault records.
+It does not use the default `.wrangler/state` database or any remote database.
+
+Serve the same isolated state through a local Worker on an allocated port:
+
+```sh
+ports run aliaz -- sh -c 'pnpm exec wrangler dev --local --persist-to .wrangler/test-accounts --port "$PORT"'
+```
+
+The login endpoint is `http://127.0.0.1:${PORT}/v1/login`. For CLI login, pass
+that local origin explicitly with `--sync-url`; omitting it selects the hosted
+service. Use isolated `ALIAZ_DATA_HOME`, `ALIAZ_CONFIG_HOME`, and
+`ALIAZ_SECRET_HOME` directories. CLI login also needs a development recovery
+phrase for encrypted aliases; the account seed does not provision recovery
+phrases or encrypted alias data.
+
+Run the Rust tests and sync Worker checks:
+
+```sh
+cargo test --all-targets
+npm run test:worker
+```
+
+Worker checks require Node.js 24 or later. CI pins Node.js 24; local checks for
+this release ran on Node.js 26. Final verification also checks Rust formatting
+and lint warnings. `.verifyq.json` schedules all four checks together.
 
 Run the CLI from source:
 

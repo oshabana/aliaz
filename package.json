@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test:worker": "node --test worker/tests/*.test.mjs",
+    "seed:test-accounts": "node scripts/seed-test-accounts.mjs",
     "worker:dev": "wrangler dev",
     "worker:deploy:dry-run": "wrangler deploy --dry-run",
     "worker:migrations:local": "wrangler d1 migrations apply aliaz-sync --local"

@@ -66,7 +66,7 @@ need_cmd() {
 }
 
 has_tty() {
-  [ -r /dev/tty ] && [ -w /dev/tty ]
+  ( : < /dev/tty > /dev/tty ) 2>/dev/null
 }
 
 ask() {

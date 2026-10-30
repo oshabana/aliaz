@@ -6,7 +6,7 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit},
 };
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use dialoguer::{FuzzySelect, theme::ColorfulTheme};
+use dialoguer::{Confirm, Editor, FuzzySelect, Input, Select, theme::SimpleTheme};
 use flate2::read::GzDecoder;
 use hkdf::Hkdf;
 use keyring::Entry;
@@ -29,14 +29,18 @@ const DEFAULT_SYNC_URL: &str = "https://aliaz-sync.still-silence-6a39.workers.de
 const KEYRING_SERVICE: &str = "dev.aliaz.cli";
 const DEFAULT_COLLECTION_NAME: &str = "shared";
 const DEFAULT_COLLECTION_ID: &str = "collection:shared";
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
+
+mod library;
+mod shell_library;
+use library::Metadata;
 
 #[derive(Parser)]
 #[command(name = "aliaz")]
-#[command(about = "Manage shell aliases from a local SQLite-backed source of truth")]
+#[command(about = "Find, save, and reuse your commands")]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -46,18 +50,79 @@ enum Commands {
         command: String,
         #[arg(long, default_value = DEFAULT_COLLECTION_NAME)]
         collection: String,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        #[arg(long)]
+        favorite: bool,
+        /// Replace an existing command after reviewing it.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Save a command without shell quoting. Opens an editor for multiline commands.
+    Save {
+        #[arg(long, conflicts_with = "command")]
+        last: bool,
+        #[arg(long)]
+        command: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        collection: Option<String>,
+    },
+    /// Show or change a command's description and tags.
+    Describe {
+        name: String,
+        #[arg(long)]
+        collection: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+    },
+    Favorite {
+        name: String,
+        #[arg(long)]
+        collection: Option<String>,
+        #[arg(long)]
+        off: bool,
+    },
+    /// Inspect changes, then undo one by its number.
+    History,
+    Undo {
+        id: Option<i64>,
+    },
+    /// Inspect saved conflict commands.
+    Conflicts,
+    Restore {
+        id: String,
+        /// Required for older backups whose collection was not recorded.
+        #[arg(long)]
+        collection: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        replace: bool,
     },
     List {
         #[arg(long)]
         all: bool,
         #[arg(long)]
         collection: Option<String>,
+        #[arg(long)]
+        details: bool,
     },
-    /// Pick an alias from a searchable list and run it.
+    /// Find a command to review. Execution requires --run.
     Select {
         /// Print the selected command instead of running it.
         #[arg(long, hide = true)]
         print_command: bool,
+        #[arg(long, hide = true, conflicts_with_all = ["run", "print_command"])]
+        print0: bool,
+        /// Run the selected command explicitly.
+        #[arg(long, conflicts_with = "print_command")]
+        run: bool,
         /// Pick the first matching alias without opening the interactive list.
         #[arg(long, hide = true)]
         first: bool,
@@ -83,6 +148,12 @@ enum Commands {
     Migrate {
         #[arg(long)]
         from: Option<PathBuf>,
+        #[arg(long)]
+        preview: bool,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        replace: bool,
     },
     Init {
         shell: Shell,
@@ -98,6 +169,12 @@ enum Commands {
     },
     Import {
         path: PathBuf,
+        #[arg(long)]
+        preview: bool,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        replace: bool,
     },
     Register {
         #[arg(long)]
@@ -159,13 +236,15 @@ enum Shell {
     Fish,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Alias {
     id: String,
     collection_id: String,
     collection_name: String,
     name: String,
     command: String,
+    #[serde(default)]
+    metadata: Metadata,
     deleted: bool,
     dirty: bool,
     sync_version: i64,
@@ -203,6 +282,8 @@ struct ExportAlias {
     command: String,
     #[serde(default = "default_collection_name")]
     collection: String,
+    #[serde(default, flatten)]
+    metadata: Metadata,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -271,13 +352,12 @@ struct PullResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct PushRequest {
-    records: Vec<UploadRecord>,
+struct PushRequest<'a> {
+    records: &'a [UploadRecord],
 }
 
 #[derive(Debug, Deserialize)]
 struct PushResponse {
-    latest_version: i64,
     records: Vec<PushedRecord>,
 }
 
@@ -308,20 +388,170 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    if cli.command.is_none() {
+        if !io::stderr().is_terminal() {
+            Cli::command().print_help()?;
+            println!();
+            return Ok(());
+        }
+        cli.command = Some(Commands::Select {
+            print_command: false,
+            print0: false,
+            run: false,
+            first: false,
+            query: vec![],
+        });
+    }
+    let command = cli.command.expect("default command supplied");
+    match &command {
+        Commands::Update => {
+            update_release_binary(
+                &std::env::current_exe().context("failed to locate current executable")?,
+            )?;
+            println!("Updated to latest release");
+        }
+        Commands::Uninstall => {
+            let binary_path =
+                std::env::current_exe().context("failed to locate current executable")?;
+            let removed = uninstall_shell_integration()?;
+            let binary_removed = remove_binary_best_effort(&binary_path)?;
+
+            if removed {
+                println!("Removed shell integration");
+            } else {
+                println!("Shell integration was not installed");
+            }
+
+            if binary_removed {
+                println!("Removed {}", binary_path.display());
+            } else {
+                println!("Could not remove {} automatically", binary_path.display());
+                println!("Delete it manually after closing any shell using aliaz");
+            }
+
+            println!("Kept your aliases database and sync settings");
+        }
+        _ => {}
+    }
+    if matches!(command, Commands::Update | Commands::Uninstall) {
+        return Ok(());
+    }
     let db_path = database_path()?;
     let store = Store::open(db_path)?;
 
-    match cli.command {
+    let history = matches!(
+        &command,
+        Commands::Add { .. }
+            | Commands::Save { .. }
+            | Commands::Describe { .. }
+            | Commands::Favorite { .. }
+            | Commands::Edit { .. }
+            | Commands::Rm { .. }
+            | Commands::Import { .. }
+            | Commands::Migrate { .. }
+            | Commands::Restore { .. }
+            | Commands::Collection {
+                command: CollectionCommand::Move { .. }
+            }
+    );
+    store.record_change(history, || run_command(&store, command))
+}
+
+fn run_command(store: &Store, command: Commands) -> Result<()> {
+    match command {
         Commands::Add {
             name,
             command,
             collection,
+            description,
+            tags,
+            favorite,
+            replace,
         } => {
+            store.check_replacement(&collection, &name, &command, replace)?;
             store.upsert_in_collection(&collection, &name, &command)?;
-            println!("Added {name} to {collection}");
+            if description.is_some() || tags.is_some() || favorite {
+                store.change_metadata(
+                    &collection,
+                    &name,
+                    description,
+                    tags,
+                    favorite.then_some(true),
+                )?;
+            }
+            println!("Added {name} to {collection}. Undo: aliaz undo");
         }
-        Commands::List { all, collection } => {
+        Commands::Save {
+            last,
+            command,
+            name,
+            collection,
+        } => library::save(store, last, command, name, collection)?,
+        Commands::Describe {
+            name,
+            collection,
+            description,
+            tags,
+        } => {
+            let scope = store.resolve_alias_scope(collection.as_deref(), &name)?;
+            if description.is_none() && tags.is_none() {
+                let alias = store
+                    .find_alias_by_collection_and_name(&scope.id, &name)?
+                    .unwrap();
+                let metadata = store.metadata(&alias.id)?;
+                println!(
+                    "{} [{}]\n{}\nDescription: {}\nTags: {}\nFavorite: {}",
+                    alias.name,
+                    scope.name,
+                    alias.command,
+                    metadata.description,
+                    metadata.tags.join(", "),
+                    metadata.favorite
+                );
+            } else {
+                store.change_metadata(&scope.name, &name, description, tags, None)?;
+                println!("Updated {name}. Undo: aliaz undo");
+            }
+        }
+        Commands::Favorite {
+            name,
+            collection,
+            off,
+        } => {
+            let scope = store.resolve_alias_scope(collection.as_deref(), &name)?;
+            store.change_metadata(&scope.name, &name, None, None, Some(!off))?;
+            println!("Updated favorite for {name}. Undo: aliaz undo");
+        }
+        Commands::History => store.print_history()?,
+        Commands::Undo { id } => store.undo(id)?,
+        Commands::Conflicts => store.print_conflicts()?,
+        Commands::Restore {
+            id,
+            collection,
+            name,
+            replace,
+        } => store.restore_conflict(&id, collection.as_deref(), name.as_deref(), replace)?,
+        Commands::List {
+            all,
+            collection,
+            details,
+        } => {
+            if details {
+                for alias in store.list_all(collection.as_deref())? {
+                    let metadata = store.metadata(&alias.id)?;
+                    println!(
+                        "{}\t{}\t{}\t{}\t{}\t{}",
+                        alias.name,
+                        alias.command,
+                        alias.collection_name,
+                        metadata.description,
+                        metadata.tags.join(","),
+                        if metadata.favorite { "favorite" } else { "" }
+                    );
+                }
+                return Ok(());
+            }
             if all {
                 let active_collections = store
                     .collections()?
@@ -352,22 +582,32 @@ fn main() -> Result<()> {
         }
         Commands::Select {
             print_command,
+            print0,
+            run,
             first,
             query,
         } => {
-            select_alias(&store, &query, print_command, first)?;
+            select_alias(store, &query, print_command, print0, first, run)?;
         }
         Commands::Rm { name, collection } => {
             let collection_name = store.delete_alias(collection.as_deref(), &name)?;
-            println!("Deleted {name} from {collection_name}");
+            println!("Deleted {name} from {collection_name}. Undo: aliaz undo");
         }
         Commands::Edit {
             name,
             command,
             collection,
         } => {
+            let scope = store.resolve_alias_scope(collection.as_deref(), &name)?;
+            let old = store
+                .find_alias_by_collection_and_name(&scope.id, &name)?
+                .ok_or_else(|| anyhow!("alias not found: {name}"))?;
+            eprintln!(
+                "Replace {name} [{}]\nOld command:\n{}\nNew command:\n{command}",
+                scope.name, old.command
+            );
             let collection_name = store.update_alias(collection.as_deref(), &name, &command)?;
-            println!("Updated {name} in {collection_name}");
+            println!("Updated {name} in {collection_name}. Undo: aliaz undo");
         }
         Commands::Collection { command } => match command {
             CollectionCommand::Add { name } => {
@@ -409,16 +649,30 @@ fn main() -> Result<()> {
                 println!("Moved {alias} from {from} to {to}");
             }
         },
-        Commands::Migrate { from } => {
+        Commands::Migrate {
+            from,
+            preview,
+            yes,
+            replace,
+        } => {
             let path = from.unwrap_or_else(default_zshrc_path);
             let contents = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
             let aliases = parse_aliases(&contents)?;
-            let count = aliases.len();
-            for alias in aliases {
-                store.upsert_in_collection(DEFAULT_COLLECTION_NAME, &alias.name, &alias.command)?;
-            }
-            println!("Imported {count} aliases");
+            let export = ExportFile {
+                version: 3,
+                collections: vec![],
+                aliases: aliases
+                    .into_iter()
+                    .map(|alias| ExportAlias {
+                        name: alias.name,
+                        command: alias.command,
+                        collection: alias.collection_name,
+                        metadata: Metadata::default(),
+                    })
+                    .collect(),
+            };
+            library::import_with_preview(store, &export, preview, yes, replace)?;
         }
         Commands::Init { shell } => {
             let aliases = store.list_effective()?;
@@ -439,38 +693,14 @@ fn main() -> Result<()> {
                 println!("{line}");
             }
         }
-        Commands::Update => {
-            update_release_binary(
-                &std::env::current_exe().context("failed to locate current executable")?,
-            )?;
-            println!("Updated to latest release");
-        }
-        Commands::Uninstall => {
-            let binary_path =
-                std::env::current_exe().context("failed to locate current executable")?;
-            let removed = uninstall_shell_integration()?;
-            let binary_removed = remove_binary_best_effort(&binary_path)?;
-
-            if removed {
-                println!("Removed shell integration");
-            } else {
-                println!("Shell integration was not installed");
-            }
-
-            if binary_removed {
-                println!("Removed {}", binary_path.display());
-            } else {
-                println!("Could not remove {} automatically", binary_path.display());
-                println!("Delete it manually after closing any shell using aliaz");
-            }
-
-            println!("Kept your aliases database and sync settings");
+        Commands::Update | Commands::Uninstall => {
+            unreachable!("handled before opening the database")
         }
         Commands::Export { output } => {
             let aliases = store.list_all(None)?;
             let collections = store.collections()?;
             let export = ExportFile {
-                version: 2,
+                version: 3,
                 collections: collections
                     .iter()
                     .map(|collection| ExportCollection {
@@ -479,12 +709,15 @@ fn main() -> Result<()> {
                     .collect(),
                 aliases: aliases
                     .iter()
-                    .map(|alias| ExportAlias {
-                        name: alias.name.clone(),
-                        command: alias.command.clone(),
-                        collection: alias.collection_name.clone(),
+                    .map(|alias| {
+                        Ok(ExportAlias {
+                            name: alias.name.clone(),
+                            command: alias.command.clone(),
+                            collection: alias.collection_name.clone(),
+                            metadata: store.metadata(&alias.id)?,
+                        })
                     })
-                    .collect(),
+                    .collect::<Result<Vec<_>>>()?,
             };
             let json = serde_json::to_string_pretty(&export)?;
             let count = export.aliases.len();
@@ -496,24 +729,20 @@ fn main() -> Result<()> {
                 println!("{json}");
             }
         }
-        Commands::Import { path } => {
+        Commands::Import {
+            path,
+            preview,
+            yes,
+            replace,
+        } => {
             let contents = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
             let export: ExportFile = serde_json::from_str(&contents)
                 .with_context(|| format!("failed to parse {}", path.display()))?;
-            if !matches!(export.version, 1 | 2) {
+            if !matches!(export.version, 1..=3) {
                 bail!("unsupported export version: {}", export.version);
             }
-            if export.version >= 2 {
-                for collection in &export.collections {
-                    store.create_collection(&collection.name)?;
-                }
-            }
-            let count = export.aliases.len();
-            for alias in export.aliases {
-                store.upsert_in_collection(&alias.collection, &alias.name, &alias.command)?;
-            }
-            println!("Imported {count} aliases");
+            library::import_with_preview(store, &export, preview, yes, replace)?;
         }
         Commands::Register {
             username,
@@ -534,7 +763,7 @@ fn main() -> Result<()> {
                 latest_version: response.latest_version,
             })?;
             let collections = parse_collection_csv(collections.as_deref())?;
-            create_and_activate_collections(&store, &collections)?;
+            create_and_activate_collections(store, &collections)?;
             println!("Registered {username}");
             println!("Recovery phrase: {phrase}");
             println!(
@@ -551,18 +780,23 @@ fn main() -> Result<()> {
             let username = prompt_username_if_missing(username)?;
             let password = prompt_secret_if_missing(password, "Password: ")?;
             let recovery_phrase = prompt_secret_if_missing(recovery_phrase, "Recovery phrase: ")?;
-            Mnemonic::parse_in_normalized(Language::English, &recovery_phrase)
-                .context("invalid recovery phrase")?;
+            let recovery_phrase =
+                Mnemonic::parse_in_normalized(Language::English, &recovery_phrase)
+                    .context("invalid recovery phrase")?
+                    .to_string();
             let response = account_request(&sync_url, "login", &username, &password)?;
-            store_recovery_phrase(&response.user_id, &recovery_phrase)?;
             let mut config = login_config(&sync_url, &username, response);
-            let result = sync_aliases(&store, &mut config, &recovery_phrase)?;
+            let result = sync_aliases(store, &mut config, &recovery_phrase)?;
+            store_recovery_phrase(&config.user_id, &recovery_phrase)?;
             save_config(&config)?;
             let collections = match collections {
                 Some(value) => parse_collection_csv(Some(&value))?,
-                None => prompt_for_collection_selection(&store)?,
+                None => prompt_for_collection_selection(store)?,
             };
             store.activate_collections(&collections)?;
+            for shell in shells_to_repair()? {
+                write_shell_integration(&shell, &store.list_effective()?)?;
+            }
             println!("Logged in {username}");
             println!(
                 "Synced: pulled {}, pushed {}, latest version {}",
@@ -590,7 +824,7 @@ fn main() -> Result<()> {
                 anyhow!("sync is not configured; run aliaz register or aliaz login first")
             })?;
             let recovery_phrase = load_recovery_phrase(&config.user_id)?;
-            let result = sync_aliases(&store, &mut config, &recovery_phrase)?;
+            let result = sync_aliases(store, &mut config, &recovery_phrase)?;
             save_config(&config)?;
             println!(
                 "Synced: pulled {}, pushed {}, latest version {}",
@@ -637,7 +871,6 @@ fn main() -> Result<()> {
             }
         }
     }
-
     Ok(())
 }
 
@@ -787,12 +1020,18 @@ fn update_release_binary(destination: &Path) -> Result<()> {
     update_release_binary_from_base_url(destination, &base_url)
 }
 
-fn select_alias(store: &Store, query: &[String], print_command: bool, first: bool) -> Result<()> {
-    let aliases = store.list_effective()?;
+fn select_alias(
+    store: &Store,
+    query: &[String],
+    print_command: bool,
+    print0: bool,
+    first: bool,
+    run: bool,
+) -> Result<()> {
+    let aliases = store.picker_aliases()?;
     if aliases.is_empty() {
-        bail!("no aliases found");
+        bail!("No saved commands. Save one with aliaz save or aliaz add NAME COMMAND");
     }
-
     let query = query.join(" ");
     let selected_index = if first {
         Some(
@@ -801,53 +1040,130 @@ fn select_alias(store: &Store, query: &[String], print_command: bool, first: boo
         )
     } else {
         if !io::stderr().is_terminal() {
-            bail!("select requires an interactive terminal");
+            bail!(
+                "select requires an interactive terminal; use --first --print-command for scripts"
+            );
         }
         interactively_select_alias(&aliases, &query)?
     };
-
-    let Some(selected_index) = selected_index else {
+    let Some(index) = selected_index else {
         return Ok(());
     };
-    let command = &aliases[selected_index].command;
-
-    if print_command {
-        println!("{command}");
+    let alias = &aliases[index];
+    store.record_use(&alias.id)?;
+    if print0 {
+        io::stdout().write_all(alias.command.as_bytes())?;
+        io::stdout().write_all(&[0])?;
         return Ok(());
     }
-
-    run_selected_command(command)
+    if print_command {
+        println!("{}", alias.command);
+        return Ok(());
+    }
+    if run {
+        return run_selected_command(&alias.command);
+    }
+    println!("{}", alias.command);
+    eprintln!(
+        "Command ready to copy. Use your shell's Aliaz shortcut to insert it for editing, or select --run to run it."
+    );
+    Ok(())
 }
 
 fn first_matching_alias(aliases: &[Alias], query: &str) -> Option<usize> {
     if query.trim().is_empty() {
         return Some(0);
     }
-
-    let query = query.to_ascii_lowercase();
-    aliases
-        .iter()
-        .position(|alias| alias_search_text(alias).contains(&query))
+    let words = query.to_ascii_lowercase();
+    aliases.iter().position(|alias| {
+        words
+            .split_whitespace()
+            .all(|word| alias_search_text(alias).contains(word))
+    })
 }
 
 fn interactively_select_alias(aliases: &[Alias], query: &str) -> Result<Option<usize>> {
     let items = aliases.iter().map(alias_select_line).collect::<Vec<_>>();
-    let theme = ColorfulTheme::default();
-    FuzzySelect::with_theme(&theme)
-        .with_prompt("Select alias")
+    let selected = FuzzySelect::with_theme(&SimpleTheme)
+        .with_prompt("Find command (Enter: review, Esc: cancel)")
         .items(&items)
         .with_initial_text(query)
         .default(0)
         .interact_opt()
-        .context("failed to read alias selection")
+        .context("failed to read command selection")?;
+    if let Some(index) = selected {
+        let alias = &aliases[index];
+        eprintln!(
+            "{} [{}]\n{}",
+            alias.name,
+            alias.collection_name,
+            display_preview(&alias.command)
+        );
+        if !alias.metadata.description.is_empty() {
+            eprintln!("{}", display_preview(&alias.metadata.description));
+        }
+        if !alias.metadata.tags.is_empty() {
+            eprintln!("Tags: {}", display_line(&alias.metadata.tags.join(", ")));
+        }
+        if !Confirm::new()
+            .with_prompt("Use this command?")
+            .default(true)
+            .interact()?
+        {
+            return Ok(None);
+        }
+    }
+    Ok(selected)
 }
 
 fn alias_select_line(alias: &Alias) -> String {
-    format!("{}\t{}", alias.name, alias.command)
+    format!(
+        "{}{} [{}]  {}  {}  {}",
+        if alias.metadata.favorite { "* " } else { "" },
+        alias.name,
+        alias.collection_name,
+        display_line(&alias.command),
+        display_line(&alias.metadata.description),
+        display_line(&alias.metadata.tags.join(" "))
+    )
+}
+
+fn display_preview(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|c| {
+            if c.is_control() && c != '\n' && c != '\t' {
+                c.escape_default().collect::<Vec<_>>()
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
+}
+
+fn display_line(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|c| {
+            if c.is_control() {
+                c.escape_default().collect::<Vec<_>>()
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
 }
 
 fn alias_search_text(alias: &Alias) -> String {
-    format!("{}\t{}", alias.name, alias.command).to_ascii_lowercase()
+    format!(
+        "{} {} {} {} {}",
+        alias.name,
+        alias.command,
+        alias.collection_name,
+        alias.metadata.description,
+        alias.metadata.tags.join(" ")
+    )
+    .to_ascii_lowercase()
 }
 
 fn run_selected_command(command: &str) -> Result<()> {
@@ -901,6 +1217,45 @@ struct SyncResult {
 }
 
 impl Store {
+    fn atomic<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+        let point = format!("aliaz_{}", Uuid::new_v4().simple());
+        self.conn.execute_batch(&format!("SAVEPOINT {point}"))?;
+        match operation() {
+            Ok(value) => {
+                self.conn.execute_batch(&format!("RELEASE {point}"))?;
+                Ok(value)
+            }
+            Err(error) => {
+                self.conn
+                    .execute_batch(&format!("ROLLBACK TO {point}; RELEASE {point}"))?;
+                Err(error)
+            }
+        }
+    }
+
+    fn import(&self, export: &ExportFile) -> Result<()> {
+        self.atomic(|| {
+            if export.version >= 2 {
+                for collection in &export.collections {
+                    self.create_collection(&collection.name)?;
+                }
+            }
+            for alias in &export.aliases {
+                self.upsert_in_collection(&alias.collection, &alias.name, &alias.command)?;
+                if export.version >= 3 {
+                    self.change_metadata(
+                        &alias.collection,
+                        &alias.name,
+                        Some(alias.metadata.description.clone()),
+                        Some(alias.metadata.tags.clone()),
+                        Some(alias.metadata.favorite),
+                    )?;
+                }
+            }
+            Ok(())
+        })
+    }
+
     fn open(path: PathBuf) -> Result<Self> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
@@ -908,8 +1263,7 @@ impl Store {
         }
 
         let conn = Connection::open(path)?;
-        let schema_version: i64 =
-            conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let schema_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if schema_version > SCHEMA_VERSION {
             bail!(
                 "this alias database was written by a newer aliaz (schema v{schema_version}, this build understands v{SCHEMA_VERSION}); run `aliaz update`"
@@ -962,6 +1316,7 @@ impl Store {
         migrate_alias_table(&conn)?;
         migrate_alias_collections(&conn)?;
         ensure_shared_collection(&conn)?;
+        library::migrate(&conn)?;
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
 
         Ok(Self { conn })
@@ -1030,7 +1385,8 @@ impl Store {
     }
 
     fn upsert_in_collection(&self, collection_name: &str, name: &str, command: &str) -> Result<()> {
-        validate_name(name)?;
+        validate_alias_name(name)?;
+        validate_command(command)?;
         let collection = self.collection_by_name(collection_name)?;
         let now = now_unix()?;
         self.conn.execute(
@@ -1109,25 +1465,27 @@ impl Store {
     }
 
     fn activate_collections(&self, names: &[String]) -> Result<Vec<String>> {
-        let mut activated = Vec::new();
-        let mut priority = self.next_collection_priority()?;
-        for name in names {
-            validate_name(name)?;
-            if name == DEFAULT_COLLECTION_NAME {
-                continue;
+        self.atomic(|| {
+            let mut activated = Vec::new();
+            let mut priority = self.next_collection_priority()?;
+            for name in names {
+                validate_name(name)?;
+                if name == DEFAULT_COLLECTION_NAME {
+                    continue;
+                }
+                let collection = self.collection_by_name(name)?;
+                if collection.active {
+                    continue;
+                }
+                self.conn.execute(
+                    "INSERT INTO active_collections (collection_id, priority) VALUES (?1, ?2)",
+                    params![collection.id, priority],
+                )?;
+                activated.push(collection.name);
+                priority += 1;
             }
-            let collection = self.collection_by_name(name)?;
-            if collection.active {
-                continue;
-            }
-            self.conn.execute(
-                "INSERT INTO active_collections (collection_id, priority) VALUES (?1, ?2)",
-                params![collection.id, priority],
-            )?;
-            activated.push(collection.name);
-            priority += 1;
-        }
-        Ok(activated)
+            Ok(activated)
+        })
     }
 
     fn deactivate_collection(&self, name: &str) -> Result<bool> {
@@ -1157,7 +1515,8 @@ impl Store {
         name: &str,
         command: &str,
     ) -> Result<String> {
-        validate_name(name)?;
+        validate_alias_name(name)?;
+        validate_command(command)?;
         let collection = self.resolve_alias_scope(collection_name, name)?;
         let changed = self.conn.execute(
             "
@@ -1191,7 +1550,7 @@ impl Store {
     }
 
     fn move_alias(&self, name: &str, from: &str, to: &str) -> Result<()> {
-        validate_name(name)?;
+        validate_alias_name(name)?;
         let from_collection = self.collection_by_name(from)?;
         let to_collection = self.collection_by_name(to)?;
         let target_exists: i64 = self.conn.query_row(
@@ -1202,19 +1561,22 @@ impl Store {
         if target_exists > 0 {
             bail!("alias already exists in target collection: {name}");
         }
-        let now = now_unix()?;
-        let changed = self.conn.execute(
-            "
+        self.atomic(|| {
+            self.vacate_alias_slot(&to_collection.id, name)?;
+            let now = now_unix()?;
+            let changed = self.conn.execute(
+                "
             UPDATE aliases
             SET collection_id = ?1, dirty = 1, updated_at = ?4
             WHERE collection_id = ?2 AND name = ?3 AND deleted = 0
             ",
-            params![to_collection.id, from_collection.id, name, now],
-        )?;
-        if changed == 0 {
-            bail!("alias not found: {name}");
-        }
-        Ok(())
+                params![to_collection.id, from_collection.id, name, now],
+            )?;
+            if changed == 0 {
+                bail!("alias not found: {name}");
+            }
+            Ok(())
+        })
     }
 
     fn resolve_alias_scope(
@@ -1308,6 +1670,17 @@ impl Store {
     ) -> Result<bool> {
         validate_name(&payload.name)?;
         let deleted = payload.deleted && payload.name != DEFAULT_COLLECTION_NAME;
+        let known_version: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT sync_version FROM collections WHERE name = ?1",
+                [&payload.name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if known_version.is_some_and(|version| version >= record.version) {
+            return Ok(false);
+        }
         if let Ok(local) = self.collection_by_name(&payload.name)
             && local.dirty
             && local.updated_at > payload.updated_at
@@ -1337,56 +1710,113 @@ impl Store {
         Ok(true)
     }
 
-    fn apply_remote_alias(&self, record: &RemoteRecord, payload: &AliasPayload) -> Result<bool> {
-        validate_name(&payload.name)?;
-        validate_name(&payload.collection_name)?;
-        self.ensure_remote_collection(&payload.collection_id, &payload.collection_name)?;
-        let collection = self.collection_by_name(&payload.collection_name)?;
-        if let Some(local) =
-            self.find_alias_by_collection_and_name(&collection.id, &payload.name)?
-        {
-            if local.dirty && local.updated_at > payload.updated_at {
-                return Ok(false);
-            }
-            if local.dirty && local.updated_at <= payload.updated_at {
-                self.conn.execute(
-                    "INSERT INTO conflict_backups (id, alias_name, command, remote_version, created_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![
-                        Uuid::new_v4().to_string(),
-                        format!("{}/{}", local.collection_name, local.name),
-                        local.command,
-                        record.version,
-                        now_unix()?
-                    ],
-                )?;
-            }
-        }
+    fn alias_by_id(&self, id: &str) -> Result<Option<Alias>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT a.id, a.collection_id, c.name, a.name, a.command, a.deleted, a.dirty,
+                    a.sync_version, a.updated_at FROM aliases a
+             JOIN collections c ON c.id = a.collection_id WHERE a.id = ?1",
+                [id],
+                alias_from_row,
+            )
+            .optional()?)
+    }
 
+    fn backup_alias(&self, local: &Alias, version: i64) -> Result<()> {
         self.conn.execute(
-            "
-            INSERT INTO aliases (id, collection_id, name, command, deleted, dirty, sync_version, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8)
-            ON CONFLICT(collection_id, name) DO UPDATE SET
-                id = excluded.id,
-                command = excluded.command,
-                deleted = excluded.deleted,
-                dirty = 0,
-                sync_version = excluded.sync_version,
-                updated_at = excluded.updated_at
-            ",
+            "INSERT INTO conflict_backups (id, alias_name, command, remote_version, created_at, snapshot)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
-                record.id,
-                collection.id,
-                payload.name,
-                payload.command,
-                payload.deleted as i64,
-                record.version,
+                Uuid::new_v4().to_string(),
+                format!("{}/{}", local.collection_name, local.name),
+                local.command,
+                version,
                 now_unix()?,
-                payload.updated_at
+                { let mut snapshot = local.clone(); snapshot.metadata = self.metadata(&local.id)?; serde_json::to_string(&snapshot)? }
             ],
         )?;
-        Ok(true)
+        Ok(())
+    }
+
+    fn vacate_alias_slot(&self, collection_id: &str, name: &str) -> Result<()> {
+        if let Some(local) = self.find_alias_by_collection_and_name(collection_id, name)? {
+            if !local.deleted {
+                bail!("alias already exists in target collection: {name}");
+            }
+            // Keep the tombstone's sync identity while freeing the unique name slot.
+            self.conn.execute(
+                "UPDATE aliases SET name = ?2, dirty = 1 WHERE id = ?1",
+                params![local.id, format!("__aliaz_deleted_{}", local.id)],
+            )?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn apply_remote_alias(&self, record: &RemoteRecord, payload: &AliasPayload) -> Result<bool> {
+        self.apply_remote_alias_with_metadata(record, payload, None)
+    }
+
+    fn apply_remote_alias_with_metadata(
+        &self,
+        record: &RemoteRecord,
+        payload: &AliasPayload,
+        incoming_metadata: Option<&Metadata>,
+    ) -> Result<bool> {
+        validate_name(&payload.name)?;
+        validate_command(&payload.command)?;
+        validate_name(&payload.collection_name)?;
+        self.atomic(|| {
+            self.ensure_remote_collection(&payload.collection_id, &payload.collection_name)?;
+            let collection = self.collection_by_name(&payload.collection_name)?;
+            let existing = self.alias_by_id(&record.id)?;
+            if let Some(local) = &existing
+                && (local.sync_version >= record.version || (local.dirty && local.updated_at > payload.updated_at)) {
+                return Ok(false);
+            }
+            let target = self.find_alias_by_collection_and_name(&collection.id, &payload.name)?;
+            if let Some(local) = target.as_ref().filter(|local| local.id != record.id) {
+                if !local.deleted && (local.updated_at > payload.updated_at ||
+                    (local.updated_at == payload.updated_at && local.id > record.id)) {
+                    // Publish a tombstone for the losing remote identity so devices converge.
+                    self.conn.execute(
+                        "INSERT INTO conflict_backups (id, alias_name, command, remote_version, created_at, snapshot, metadata_pending)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        params![Uuid::new_v4().to_string(), format!("{}/{}", payload.collection_name, payload.name),
+                                payload.command, record.version, now_unix()?, serde_json::to_string(&Alias {
+                                    id: record.id.clone(), collection_id: collection.id.clone(), collection_name: collection.name.clone(),
+                                    name: payload.name.clone(), command: payload.command.clone(), metadata: incoming_metadata.cloned().unwrap_or(self.metadata(&record.id)?),
+                                    deleted: false, dirty: false, sync_version: record.version, updated_at: payload.updated_at,
+                                })?, incoming_metadata.is_none() && !self.has_metadata(&record.id)?])?;
+                    if let Some(existing) = &existing
+                        && !existing.deleted { self.backup_alias(existing, record.version)?; }
+                    self.conn.execute(
+                        "INSERT INTO aliases (id, collection_id, name, command, deleted, dirty, sync_version, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, 1, 1, ?5, ?6, ?7)
+                         ON CONFLICT(id) DO UPDATE SET name = excluded.name, deleted = 1, dirty = 1,
+                             sync_version = excluded.sync_version, updated_at = excluded.updated_at",
+                        params![record.id, collection.id, format!("__aliaz_deleted_{}", record.id),
+                                payload.command, record.version, now_unix()?, payload.updated_at])?;
+                    return Ok(true);
+                }
+                if !local.deleted { self.backup_alias(local, record.version)?; }
+                self.conn.execute(
+                    "UPDATE aliases SET deleted = 1, dirty = 1, name = ?2 WHERE id = ?1",
+                    params![local.id, format!("__aliaz_deleted_{}", local.id)])?;
+            }
+            if let Some(local) = &existing
+                && local.dirty { self.backup_alias(local, record.version)?; }
+            self.conn.execute(
+                "INSERT INTO aliases (id, collection_id, name, command, deleted, dirty, sync_version, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8)
+                 ON CONFLICT(id) DO UPDATE SET collection_id = excluded.collection_id,
+                    name = excluded.name, command = excluded.command, deleted = excluded.deleted,
+                    dirty = 0, sync_version = excluded.sync_version, updated_at = excluded.updated_at",
+                params![record.id, collection.id, payload.name, payload.command, payload.deleted as i64,
+                        record.version, now_unix()?, payload.updated_at])?;
+            Ok(true)
+        })
     }
 
     fn ensure_remote_collection(&self, id: &str, name: &str) -> Result<()> {
@@ -1406,18 +1836,40 @@ impl Store {
         Ok(())
     }
 
-    fn mark_collection_synced(&self, id: &str, version: i64) -> Result<()> {
+    fn mark_collection_synced(&self, snapshot: &Collection, version: i64) -> Result<()> {
         self.conn.execute(
-            "UPDATE collections SET dirty = 0, sync_version = ?2 WHERE id = ?1",
-            params![id, version],
+            "UPDATE collections SET
+             dirty = CASE WHEN name = ?3 AND deleted = ?4 AND updated_at = ?5 AND sync_version = ?6
+                          THEN 0 ELSE dirty END,
+             sync_version = MAX(sync_version, ?2) WHERE id = ?1",
+            params![
+                snapshot.id,
+                version,
+                snapshot.name,
+                snapshot.deleted as i64,
+                snapshot.updated_at,
+                snapshot.sync_version
+            ],
         )?;
         Ok(())
     }
 
-    fn mark_alias_synced(&self, id: &str, version: i64) -> Result<()> {
+    fn mark_alias_synced(&self, snapshot: &Alias, version: i64) -> Result<()> {
         self.conn.execute(
-            "UPDATE aliases SET dirty = 0, sync_version = ?2 WHERE id = ?1",
-            params![id, version],
+            "UPDATE aliases SET
+             dirty = CASE WHEN collection_id = ?3 AND name = ?4 AND command = ?5 AND deleted = ?6
+                          AND updated_at = ?7 AND sync_version = ?8 THEN 0 ELSE dirty END,
+             sync_version = MAX(sync_version, ?2) WHERE id = ?1",
+            params![
+                snapshot.id,
+                version,
+                snapshot.collection_id,
+                snapshot.name,
+                snapshot.command,
+                snapshot.deleted as i64,
+                snapshot.updated_at,
+                snapshot.sync_version
+            ],
         )?;
         Ok(())
     }
@@ -1433,7 +1885,8 @@ impl Store {
             "
             SELECT
                 (SELECT COUNT(*) FROM collections WHERE dirty = 1) +
-                (SELECT COUNT(*) FROM aliases WHERE dirty = 1)
+                (SELECT COUNT(*) FROM aliases WHERE dirty = 1) +
+                (SELECT COUNT(*) FROM alias_metadata WHERE dirty = 1)
             ",
             [],
             |row| row.get(0),
@@ -1460,6 +1913,7 @@ fn alias_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Alias> {
         collection_name: row.get(2)?,
         name: row.get(3)?,
         command: row.get(4)?,
+        metadata: Metadata::default(),
         deleted: row.get::<_, i64>(5)? == 1,
         dirty: row.get::<_, i64>(6)? == 1,
         sync_version: row.get(7)?,
@@ -1637,6 +2091,7 @@ fn parse_aliases(contents: &str) -> Result<Vec<Alias>> {
                     collection_name: DEFAULT_COLLECTION_NAME.to_owned(),
                     name: name.to_owned(),
                     command: command.to_owned(),
+                    metadata: Metadata::default(),
                     deleted: false,
                     dirty: true,
                     sync_version: 0,
@@ -1647,6 +2102,21 @@ fn parse_aliases(contents: &str) -> Result<Vec<Alias>> {
     }
 
     Ok(aliases)
+}
+
+fn validate_command(command: &str) -> Result<()> {
+    if command.contains('\0') {
+        bail!("command contains a null character and cannot be used by a shell");
+    }
+    Ok(())
+}
+
+fn validate_alias_name(name: &str) -> Result<()> {
+    validate_name(name)?;
+    if name.starts_with('-') || name == "aliaz" || name.starts_with("__aliaz_") {
+        bail!("alias name cannot start with '-' or '__aliaz_' or be 'aliaz': {name}");
+    }
+    Ok(())
 }
 
 fn validate_name(name: &str) -> Result<()> {
@@ -1928,7 +2398,10 @@ fn shell_integration_path(shell: &Shell) -> Result<PathBuf> {
 
 fn startup_path(shell: &Shell) -> Result<PathBuf> {
     Ok(match shell {
-        Shell::Zsh => home_dir()?.join(".zshrc"),
+        Shell::Zsh => std::env::var_os("ZDOTDIR")
+            .map(PathBuf::from)
+            .unwrap_or(home_dir()?)
+            .join(".zshrc"),
         Shell::Bash => home_dir()?.join(".bashrc"),
         Shell::Fish => bail!("fish does not use a zsh/bash startup file"),
     })
@@ -1956,12 +2429,25 @@ fn uninstall_shell_integration() -> Result<bool> {
 }
 
 fn uninstall_startup_file(shell: &Shell) -> Result<bool> {
-    let startup_path = startup_path(shell)?;
+    let mut paths = vec![startup_path(shell)?];
+    if matches!(shell, Shell::Bash) {
+        for profile in [".bash_profile", ".bash_login", ".profile"] {
+            paths.push(home_dir()?.join(profile));
+        }
+    }
+    let mut removed = false;
+    for path in paths {
+        removed |= uninstall_startup_path(shell, &path)?;
+    }
+    Ok(removed)
+}
+
+fn uninstall_startup_path(shell: &Shell, startup_path: &Path) -> Result<bool> {
     let integration_path = shell_integration_path(shell)?;
-    let source_line = sh_source_command(&integration_path)?;
+    let source_line = startup_source_line(startup_path, &integration_path)?;
     let comment = "# Aliaz shell integration";
 
-    let existing = match fs::read_to_string(&startup_path) {
+    let existing = match fs::read_to_string(startup_path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => {
@@ -1998,13 +2484,13 @@ fn uninstall_startup_file(shell: &Shell) -> Result<bool> {
     }
 
     if kept.is_empty() {
-        remove_file_if_exists(&startup_path)?;
+        remove_file_if_exists(startup_path)?;
         return Ok(true);
     }
 
     let mut contents = kept.join("\n");
     contents.push('\n');
-    fs::write(&startup_path, contents)
+    fs::write(startup_path, contents)
         .with_context(|| format!("failed to write {}", startup_path.display()))?;
     Ok(true)
 }
@@ -2180,7 +2666,59 @@ fn shell_integration_contents(shell: &Shell, aliases: &[Alias], path: &PathBuf) 
         Shell::Zsh | Shell::Bash => sh_wrapper_lines(binary, &source_command),
         Shell::Fish => fish_wrapper_lines(binary, path),
     };
-    lines.extend(shell_alias_lines(shell, aliases));
+    let cleanup = match shell {
+        Shell::Bash | Shell::Zsh => {
+            "unalias __aliaz_cleanup 2>/dev/null || :; if command -v __aliaz_cleanup >/dev/null 2>&1; then __aliaz_cleanup; fi"
+        }
+        Shell::Fish => "if functions -q __aliaz_cleanup; __aliaz_cleanup; end",
+    };
+    lines.insert(1, cleanup.to_owned());
+    let mut next_cleanup = Vec::new();
+    for (index, alias) in aliases
+        .iter()
+        .filter(|alias| validate_alias_name(&alias.name).is_ok())
+        .enumerate()
+    {
+        let name = shell_quote(&alias.name);
+        let variable = format!("__aliaz_owned_{index}");
+        let definition = shell_alias_lines(shell, std::slice::from_ref(alias)).remove(0);
+        match shell {
+            Shell::Bash | Shell::Zsh => {
+                lines.push(format!("unset {variable}"));
+                lines.push(format!(
+                    "case \" ${{__aliaz_overrides:-}} \" in *\" {} \"*) ;; *)",
+                    alias.name
+                ));
+                lines.push(definition);
+                lines.push(format!("{variable}=$(alias -- {name} 2>/dev/null)"));
+                lines.push(";; esac".to_owned());
+                next_cleanup.push(format!("if [ -n \"${{{variable}:-}}\" ]; then if [ \"$(alias -- {name} 2>/dev/null)\" = \"${{{variable}}}\" ]; then unalias -- {name}; elif alias -- {name} >/dev/null 2>&1; then __aliaz_overrides=\"${{__aliaz_overrides:-}} {}\"; fi; fi", alias.name));
+            }
+            Shell::Fish => {
+                lines.push(format!("set -e {variable}"));
+                lines.push(format!("if not contains -- {name} $__aliaz_overrides"));
+                lines.push(definition);
+                lines.push(format!(
+                    "set -g {variable} (functions {name} | string collect)"
+                ));
+                lines.push("end".to_owned());
+                next_cleanup.push(format!("if set -q {variable}; set -l __aliaz_current_definition (functions {name} | string collect); if test \"$__aliaz_current_definition\" = \"${variable}\"; functions -e {name}; else; if functions -q {name}; set -ga __aliaz_overrides {name}; end; end; end"));
+            }
+        }
+    }
+    match shell {
+        Shell::Bash | Shell::Zsh => {
+            lines.push("__aliaz_cleanup() {".to_owned());
+            lines.push(":".to_owned());
+            lines.extend(next_cleanup);
+            lines.push("}".to_owned());
+        }
+        Shell::Fish => {
+            lines.push("function __aliaz_cleanup".to_owned());
+            lines.extend(next_cleanup);
+            lines.push("end".to_owned());
+        }
+    }
     let mut contents = lines.join("\n");
     contents.push('\n');
     Ok(contents)
@@ -2200,86 +2738,46 @@ fn sh_source_path_token(path: &PathBuf) -> Result<String> {
 }
 
 fn sh_wrapper_lines(binary: &str, source_command: &str) -> Vec<String> {
-    vec![
-        "# Managed by Aliaz. Do not edit.".to_owned(),
-        format!("__aliaz_bin={}", shell_quote(binary)),
-        "aliaz() {".to_owned(),
-        "  local __aliaz_status".to_owned(),
-        "  local __aliaz_shell".to_owned(),
-        "  local __aliaz_selected_command".to_owned(),
-        "  if [ \"${1:-}\" = \"select\" ]; then".to_owned(),
-        "    __aliaz_selected_command=$(\"$__aliaz_bin\" select --print-command \"${@:2}\")"
-            .to_owned(),
-        "    __aliaz_status=$?".to_owned(),
-        "    if [ $__aliaz_status -eq 0 ] && [ -n \"$__aliaz_selected_command\" ]; then".to_owned(),
-        "      eval \"$__aliaz_selected_command\"".to_owned(),
-        "      return $?".to_owned(),
-        "    fi".to_owned(),
-        "    return $__aliaz_status".to_owned(),
-        "  fi".to_owned(),
-        "  \"$__aliaz_bin\" \"$@\"".to_owned(),
-        "  __aliaz_status=$?".to_owned(),
-        "  if [ $__aliaz_status -eq 0 ]; then".to_owned(),
-        "    case \"${1:-}\" in".to_owned(),
-        "      add|edit|rm|delete|collection|migrate|import|sync)".to_owned(),
-        "        __aliaz_shell=\"\"".to_owned(),
-        "        if [ -n \"${ZSH_VERSION:-}\" ]; then".to_owned(),
-        "          __aliaz_shell=\"zsh\"".to_owned(),
-        "        elif [ -n \"${BASH_VERSION:-}\" ]; then".to_owned(),
-        "          __aliaz_shell=\"bash\"".to_owned(),
-        "        fi".to_owned(),
-        "        if [ -n \"$__aliaz_shell\" ]; then".to_owned(),
-        format!(
-            "          \"$__aliaz_bin\" init \"$__aliaz_shell\" >/dev/null && {}",
-            source_command
-        ),
-        "        fi".to_owned(),
-        "        ;;".to_owned(),
-        "    esac".to_owned(),
-        "  fi".to_owned(),
-        "  return $__aliaz_status".to_owned(),
-        "}".to_owned(),
-        "".to_owned(),
-    ]
+    shell_library::sh(binary, source_command)
 }
 
 fn fish_wrapper_lines(binary: &str, path: &Path) -> Vec<String> {
-    vec![
-        "# Managed by Aliaz. Do not edit.".to_owned(),
-        format!("set -g __aliaz_bin {}", shell_quote(binary)),
-        "function aliaz".to_owned(),
-        "  if test (count $argv) -gt 0; and test $argv[1] = select".to_owned(),
-        "    set -l __aliaz_selected_command (\"$__aliaz_bin\" select --print-command $argv[2..-1])".to_owned(),
-        "    set -l __aliaz_status $status".to_owned(),
-        "    if test $__aliaz_status -eq 0; and test -n \"$__aliaz_selected_command\"".to_owned(),
-        "      eval \"$__aliaz_selected_command\"".to_owned(),
-        "      return $status".to_owned(),
-        "    end".to_owned(),
-        "    return $__aliaz_status".to_owned(),
-        "  end".to_owned(),
-        "  \"$__aliaz_bin\" $argv".to_owned(),
-        "  set -l __aliaz_status $status".to_owned(),
-        "  if test $__aliaz_status -eq 0".to_owned(),
-        "    switch $argv[1]".to_owned(),
-        "      case add edit rm delete collection migrate import sync".to_owned(),
-        "        \"$__aliaz_bin\" init fish >/dev/null".to_owned(),
-        format!(
-            "        source {}",
-            shell_quote(&path.display().to_string())
-        ),
-        "    end".to_owned(),
-        "  end".to_owned(),
-        "  return $__aliaz_status".to_owned(),
-        "end".to_owned(),
-        "".to_owned(),
-    ]
+    shell_library::fish(binary, path)
 }
 
 fn configure_startup_file(shell: &Shell, integration_path: &PathBuf) -> Result<PathBuf> {
     let startup_path = startup_path(shell)?;
-    let source_line = sh_source_command(integration_path)?;
+    configure_startup_path(&startup_path, integration_path)?;
+    if matches!(shell, Shell::Bash) {
+        let home = home_dir()?;
+        let profile = [".bash_profile", ".bash_login", ".profile"]
+            .iter()
+            .map(|name| home.join(name))
+            .find(|path| path.exists())
+            .unwrap_or_else(|| home.join(".bash_profile"));
+        configure_startup_path(&profile, integration_path)?;
+    }
+    Ok(startup_path)
+}
+
+fn startup_source_line(startup_path: &Path, integration_path: &PathBuf) -> Result<String> {
+    let source = sh_source_command(integration_path)?;
+    if startup_path
+        .file_name()
+        .is_some_and(|name| name == ".profile")
+    {
+        Ok(format!(
+            "if [ -n \"${{BASH_VERSION:-}}\" ]; then {source}; fi"
+        ))
+    } else {
+        Ok(source)
+    }
+}
+
+fn configure_startup_path(startup_path: &Path, integration_path: &PathBuf) -> Result<()> {
+    let source_line = startup_source_line(startup_path, integration_path)?;
     let comment = "# Aliaz shell integration";
-    let existing = match fs::read_to_string(&startup_path) {
+    let existing = match fs::read_to_string(startup_path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => {
@@ -2287,8 +2785,8 @@ fn configure_startup_file(shell: &Shell, integration_path: &PathBuf) -> Result<P
                 .with_context(|| format!("failed to read {}", startup_path.display()));
         }
     };
-    if existing.contains(&source_line) {
-        return Ok(startup_path);
+    if existing.lines().any(|line| line.trim() == source_line) {
+        return Ok(());
     }
 
     let mut contents = existing;
@@ -2299,14 +2797,15 @@ fn configure_startup_file(shell: &Shell, integration_path: &PathBuf) -> Result<P
     contents.push('\n');
     contents.push_str(&source_line);
     contents.push('\n');
-    fs::write(&startup_path, contents)
+    fs::write(startup_path, contents)
         .with_context(|| format!("failed to write {}", startup_path.display()))?;
-    Ok(startup_path)
+    Ok(())
 }
 
 fn shell_alias_lines(shell: &Shell, aliases: &[Alias]) -> Vec<String> {
     aliases
         .iter()
+        .filter(|alias| validate_alias_name(&alias.name).is_ok())
         .map(|alias| match shell {
             Shell::Zsh | Shell::Bash => {
                 format!("alias {}={}", alias.name, shell_quote(&alias.command))
@@ -2365,6 +2864,21 @@ fn sync_aliases(
         .json()?;
 
     let mut pulled = 0;
+    let incoming_metadata = pull
+        .records
+        .iter()
+        .filter(|record| record.record_type == "alias_metadata")
+        .map(|record| {
+            Ok((record, {
+                let payload =
+                    decrypt_record::<library::MetadataPayload>(&key, &record.encrypted_blob)?;
+                if record.id != library::metadata_record_id(&payload.alias_id) {
+                    bail!("command details have an invalid identity");
+                }
+                payload
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
     for record in &pull.records {
         if record.record_type == "collection" {
             let payload: CollectionPayload = decrypt_record(&key, &record.encrypted_blob)?;
@@ -2373,18 +2887,29 @@ fn sync_aliases(
             }
         }
     }
+    // Keep local details intact until losing local commands have been backed up.
     for record in &pull.records {
         if record.record_type == "alias" {
             let payload: AliasPayload = decrypt_record(&key, &record.encrypted_blob)?;
-            if store.apply_remote_alias(record, &payload)? {
+            let details = incoming_metadata
+                .iter()
+                .find(|(_, details)| details.alias_id == record.id)
+                .map(|(_, details)| &details.metadata);
+            if store.apply_remote_alias_with_metadata(record, &payload, details)? {
                 pulled += 1;
             }
+        }
+    }
+    for (record, payload) in incoming_metadata {
+        if store.apply_remote_metadata(record, &payload)? {
+            pulled += 1;
         }
     }
     config.latest_version = pull.latest_version;
 
     let pending_collections = store.pending_collections()?;
     let pending_aliases = store.pending_aliases()?;
+    let pending_metadata = store.pending_metadata()?;
     let mut uploads = Vec::with_capacity(pending_collections.len() + pending_aliases.len());
     for collection in &pending_collections {
         let payload = CollectionPayload {
@@ -2416,27 +2941,48 @@ fn sync_aliases(
         });
     }
 
+    for payload in &pending_metadata {
+        uploads.push(UploadRecord {
+            id: library::metadata_record_id(&payload.alias_id),
+            record_type: "alias_metadata".to_owned(),
+            encrypted_blob: encrypt_record(&key, payload)?,
+            updated_at: payload.updated_at,
+        });
+    }
     let pushed = uploads.len();
-    if pushed > 0 {
+    for chunk in uploads.chunks(500) {
         let push_url = format!("{}/v1/records", config.sync_url.trim_end_matches('/'));
-        let push: PushResponse = client
+        let response = client
             .post(push_url)
             .bearer_auth(&config.token)
-            .json(&PushRequest { records: uploads })
-            .send()?
-            .error_for_status()?
-            .json()?;
+            .json(&PushRequest { records: chunk })
+            .send()?;
+        if response.status() == reqwest::StatusCode::BAD_REQUEST && !pending_metadata.is_empty() {
+            let error: serde_json::Value = response.json().unwrap_or_default();
+            if error.get("error").and_then(|value| value.as_str()) == Some("invalid_record_type") {
+                bail!("Command details cannot sync yet. Your changes remain saved locally.");
+            }
+            bail!("sync upload was rejected; your changes remain saved locally");
+        }
+        let push: PushResponse = response.error_for_status()?.json()?;
         for record in push.records {
-            if pending_collections
+            if let Some(snapshot) = pending_collections
                 .iter()
-                .any(|collection| collection.id == record.id)
+                .find(|entry| entry.id == record.id)
             {
-                store.mark_collection_synced(&record.id, record.version)?;
-            } else {
-                store.mark_alias_synced(&record.id, record.version)?;
+                store.mark_collection_synced(snapshot, record.version)?;
+            } else if let Some(snapshot) =
+                pending_aliases.iter().find(|entry| entry.id == record.id)
+            {
+                store.mark_alias_synced(snapshot, record.version)?;
+            } else if let Some(snapshot) = pending_metadata
+                .iter()
+                .find(|entry| library::metadata_record_id(&entry.alias_id) == record.id)
+            {
+                store.mark_metadata_synced(snapshot, record.version)?;
             }
         }
-        config.latest_version = push.latest_version;
+        // Only the pull watermark is safe: other devices may have pushed before our upload.
     }
 
     Ok(SyncResult { pulled, pushed })
@@ -2515,6 +3061,328 @@ mod tests {
     use std::thread;
     use tar::Builder;
 
+    fn test_store() -> (tempfile::TempDir, Store) {
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = Store::open(temp.path().join("aliases.db")).unwrap();
+        (temp, store)
+    }
+
+    fn remote_alias(
+        id: &str,
+        collection: &str,
+        name: &str,
+        version: i64,
+    ) -> (RemoteRecord, AliasPayload) {
+        (
+            RemoteRecord {
+                id: id.to_owned(),
+                record_type: "alias".to_owned(),
+                encrypted_blob: String::new(),
+                version,
+            },
+            AliasPayload {
+                collection_id: collection_id_for_name(collection),
+                collection_name: collection.to_owned(),
+                name: name.to_owned(),
+                command: "remote command".to_owned(),
+                deleted: false,
+                updated_at: 200,
+            },
+        )
+    }
+
+    #[test]
+    fn moves_preserve_source_identity_and_destination_tombstone() {
+        let (_temp, store) = test_store();
+        store.create_collection("work").unwrap();
+        store
+            .upsert_in_collection("shared", "gs", "source")
+            .unwrap();
+        let source = store.list_all(Some("shared")).unwrap().remove(0);
+        store
+            .upsert_in_collection("work", "gs", "deleted destination")
+            .unwrap();
+        let destination = store.list_all(Some("work")).unwrap().remove(0);
+        store.delete_alias(Some("work"), "gs").unwrap();
+        store.move_alias("gs", "shared", "work").unwrap();
+        let moved = store.list_all(Some("work")).unwrap().remove(0);
+        assert_eq!(moved.id, source.id);
+        assert_eq!(moved.command, "source");
+        let tombstone = store.alias_by_id(&destination.id).unwrap().unwrap();
+        assert!(tombstone.deleted && tombstone.dirty);
+        assert_ne!(tombstone.name, "gs");
+    }
+
+    #[test]
+    fn remote_move_updates_by_id_and_replays_without_duplicates() {
+        let (_temp, store) = test_store();
+        let (mut record, mut payload) = remote_alias("remote-1", "shared", "gs", 1);
+        store.apply_remote_alias(&record, &payload).unwrap();
+        store.create_collection("work").unwrap();
+        store
+            .upsert_in_collection("work", "gs", "deleted destination")
+            .unwrap();
+        let tombstone = store.list_all(Some("work")).unwrap().remove(0);
+        store.delete_alias(Some("work"), "gs").unwrap();
+        record.version = 2;
+        payload.collection_id = collection_id_for_name("work");
+        payload.collection_name = "work".to_owned();
+        payload.updated_at = 201;
+        assert!(store.apply_remote_alias(&record, &payload).unwrap());
+        assert!(!store.apply_remote_alias(&record, &payload).unwrap());
+        assert!(store.list_all(Some("shared")).unwrap().is_empty());
+        assert_eq!(store.list_all(Some("work")).unwrap()[0].id, "remote-1");
+        assert!(store.alias_by_id(&tombstone.id).unwrap().unwrap().deleted);
+    }
+
+    #[test]
+    fn remote_name_collision_has_deterministic_winner_and_backup() {
+        let (_temp, store) = test_store();
+        let (record, payload) = remote_alias("a", "shared", "gs", 1);
+        store.apply_remote_alias(&record, &payload).unwrap();
+        let (winner, same_name) = remote_alias("z", "shared", "gs", 2);
+        assert!(store.apply_remote_alias(&winner, &same_name).unwrap());
+        assert_eq!(store.list_effective().unwrap()[0].id, "z");
+        assert!(store.alias_by_id("a").unwrap().unwrap().deleted);
+        let backups: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM conflict_backups", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(backups, 1);
+        assert!(!store.apply_remote_alias(&record, &payload).unwrap());
+        assert_eq!(store.list_effective().unwrap()[0].id, "z");
+    }
+
+    #[test]
+    fn invalid_import_and_activation_roll_back_prior_entries() {
+        let (_temp, store) = test_store();
+        let export = ExportFile {
+            version: 2,
+            collections: vec![ExportCollection {
+                name: "work".to_owned(),
+            }],
+            aliases: vec![
+                ExportAlias {
+                    name: "ok".to_owned(),
+                    command: "true".to_owned(),
+                    collection: "work".to_owned(),
+                    metadata: Metadata::default(),
+                },
+                ExportAlias {
+                    name: "invalid!".to_owned(),
+                    command: "false".to_owned(),
+                    collection: "work".to_owned(),
+                    metadata: Metadata::default(),
+                },
+            ],
+        };
+        assert!(store.import(&export).is_err());
+        assert!(store.collection_by_name("work").is_err());
+        assert!(store.list_all(None).unwrap().is_empty());
+        store.create_collection("work").unwrap();
+        assert!(
+            store
+                .activate_collections(&["work".to_owned(), "missing".to_owned()])
+                .is_err()
+        );
+        assert!(!store.collection_by_name("work").unwrap().active);
+    }
+
+    #[test]
+    fn upload_ack_does_not_clear_edits_made_after_snapshot() {
+        let (_temp, store) = test_store();
+        store.upsert_in_collection("shared", "gs", "old").unwrap();
+        let snapshot = store.pending_aliases().unwrap().remove(0);
+        store.upsert_in_collection("shared", "gs", "new").unwrap();
+        store.mark_alias_synced(&snapshot, 7).unwrap();
+        assert_eq!(store.pending_aliases().unwrap()[0].command, "new");
+        let own_upload = RemoteRecord {
+            id: snapshot.id.clone(),
+            record_type: "alias".to_owned(),
+            encrypted_blob: String::new(),
+            version: 7,
+        };
+        let old_payload = AliasPayload {
+            collection_id: snapshot.collection_id.clone(),
+            collection_name: snapshot.collection_name.clone(),
+            name: snapshot.name.clone(),
+            command: snapshot.command.clone(),
+            deleted: snapshot.deleted,
+            updated_at: snapshot.updated_at,
+        };
+        assert!(!store.apply_remote_alias(&own_upload, &old_payload).unwrap());
+        assert_eq!(store.pending_aliases().unwrap()[0].command, "new");
+        assert_eq!(store.pending_aliases().unwrap()[0].sync_version, 7);
+        store.create_collection("work").unwrap();
+        let snapshot = store.pending_collections().unwrap().remove(0);
+        store
+            .conn
+            .execute(
+                "UPDATE collections SET deleted = 1 WHERE id = ?1",
+                [&snapshot.id],
+            )
+            .unwrap();
+        store.mark_collection_synced(&snapshot, 8).unwrap();
+        assert!(!store.pending_collections().unwrap().is_empty());
+        let own_collection_upload = RemoteRecord {
+            id: snapshot.id.clone(),
+            record_type: "collection".to_owned(),
+            encrypted_blob: String::new(),
+            version: 8,
+        };
+        let old_collection_payload = CollectionPayload {
+            name: snapshot.name.clone(),
+            deleted: snapshot.deleted,
+            updated_at: snapshot.updated_at,
+        };
+        assert!(
+            !store
+                .apply_remote_collection(&own_collection_upload, &old_collection_payload)
+                .unwrap()
+        );
+        assert!(store.pending_collections().unwrap()[0].deleted);
+    }
+
+    #[test]
+    fn rejects_shell_reserved_aliases_but_keeps_old_records_removable() {
+        let (_temp, store) = test_store();
+        for name in ["-x", "aliaz", "__aliaz_cleanup", "__aliaz_bin"] {
+            assert!(store.upsert_in_collection("shared", name, "true").is_err());
+            store.conn.execute("INSERT INTO aliases (id, collection_id, name, command, created_at, updated_at) VALUES (?1, ?2, ?1, 'true', 1, 1)", params![name, DEFAULT_COLLECTION_ID]).unwrap();
+            assert!(store.delete_alias(Some("shared"), name).is_ok());
+        }
+        assert!(
+            store
+                .upsert_in_collection("shared", "foo-bar", "true")
+                .is_ok()
+        );
+    }
+
+    fn mock_sync_server(
+        count: usize,
+        mut reply: impl FnMut(usize, &str, serde_json::Value) -> serde_json::Value + Send + 'static,
+    ) -> (String, thread::JoinHandle<()>) {
+        use std::io::Read;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let handle = thread::spawn(move || {
+            for index in 0..count {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                std::time::Instant::now() < deadline,
+                                "missing fixture request"
+                            );
+                            thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(e) => panic!("fixture accept failed: {e}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let path = line.split_whitespace().nth(1).unwrap().to_owned();
+                let mut length = 0;
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some((key, value)) = line.split_once(':')
+                        && key.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+                let mut bytes = vec![0; length];
+                reader.read_exact(&mut bytes).unwrap();
+                let body = if bytes.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::from_slice(&bytes).unwrap()
+                };
+                let response = reply(index, &path, body).to_string();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).unwrap();
+            }
+        });
+        (url, handle)
+    }
+
+    const TEST_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    #[test]
+    fn sync_keeps_pull_cursor_to_receive_update_between_pull_and_push() {
+        let (_temp, store) = test_store();
+        store
+            .upsert_in_collection("shared", "local", "local command")
+            .unwrap();
+        let (_, payload) = remote_alias("other-device", "shared", "remote", 11);
+        let encrypted = encrypt_record(&derive_key(TEST_PHRASE).unwrap(), &payload).unwrap();
+        let (url, server) = mock_sync_server(3, move |index, path, body| match index {
+            0 => {
+                assert_eq!(path, "/v1/records?after=0");
+                serde_json::json!({ "latest_version":10, "records":[] })
+            }
+            1 => {
+                assert_eq!(path, "/v1/records");
+                serde_json::json!({ "latest_version":12, "records":[{ "id":body["records"][0]["id"], "version":12 }] })
+            }
+            _ => {
+                assert_eq!(path, "/v1/records?after=10");
+                serde_json::json!({ "latest_version":12, "records":[{ "id":"other-device", "record_type":"alias", "encrypted_blob":encrypted, "version":11 }] })
+            }
+        });
+        let mut config = SyncConfig {
+            sync_url: url,
+            username: "testuser".to_owned(),
+            user_id: "fixture".to_owned(),
+            token: "fixture-only".to_owned(),
+            latest_version: 0,
+        };
+        sync_aliases(&store, &mut config, TEST_PHRASE).unwrap();
+        assert_eq!(config.latest_version, 10);
+        sync_aliases(&store, &mut config, TEST_PHRASE).unwrap();
+        server.join().unwrap();
+        assert_eq!(store.list_effective().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn sync_chunks_more_than_five_hundred_pending_records() {
+        let (_temp, store) = test_store();
+        for index in 0..501 {
+            store
+                .upsert_in_collection("shared", &format!("a{index}"), "true")
+                .unwrap();
+        }
+        let (url, server) = mock_sync_server(3, |index, _, body| {
+            if index == 0 {
+                return serde_json::json!({ "latest_version":0, "records":[] });
+            }
+            let records = body["records"].as_array().unwrap();
+            assert_eq!(records.len(), if index == 1 { 500 } else { 1 });
+            serde_json::json!({ "latest_version":501, "records":records.iter().enumerate().map(|(i, record)| serde_json::json!({ "id":record["id"], "version":i + index * 500 })).collect::<Vec<_>>() })
+        });
+        let mut config = SyncConfig {
+            sync_url: url,
+            username: "testuser".to_owned(),
+            user_id: "fixture".to_owned(),
+            token: "fixture-only".to_owned(),
+            latest_version: 0,
+        };
+        let result = sync_aliases(&store, &mut config, TEST_PHRASE).unwrap();
+        server.join().unwrap();
+        assert_eq!(result.pushed, 501);
+        assert!(store.pending_aliases().unwrap().is_empty());
+    }
+
     #[test]
     fn encryption_round_trips_collection_scoped_alias_payload() {
         let key = derive_key("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
@@ -2570,7 +3438,7 @@ mod tests {
             latest_version: 42,
         };
 
-        let config = login_config("https://sync.example", "ada", response);
+        let config = login_config("https://sync.example", "testuser", response);
 
         assert_eq!(config.latest_version, 0);
     }
@@ -2579,7 +3447,7 @@ mod tests {
     fn sync_config_json_does_not_contain_recovery_phrase() {
         let config = SyncConfig {
             sync_url: "https://sync.example".to_owned(),
-            username: "ada".to_owned(),
+            username: "testuser".to_owned(),
             user_id: "user-1".to_owned(),
             token: "token-1".to_owned(),
             latest_version: 7,
@@ -2659,5 +3527,84 @@ mod tests {
         handle.join().unwrap();
 
         assert_eq!(fs::read(&destination).unwrap(), b"new-binary");
+    }
+
+    #[test]
+    fn pull_keeps_losing_local_command_details_together_in_the_conflict_backup() {
+        let (_temp, store) = test_store();
+        store
+            .upsert_in_collection("shared", "same", "local command")
+            .unwrap();
+        store
+            .change_metadata(
+                "shared",
+                "same",
+                Some("local purpose".into()),
+                Some(vec!["local".into()]),
+                Some(true),
+            )
+            .unwrap();
+        let alias = store.list_effective().unwrap().remove(0);
+        store
+            .conn
+            .execute(
+                "UPDATE aliases SET updated_at = 1 WHERE id = ?1",
+                [&alias.id],
+            )
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE alias_metadata SET updated_at = 1 WHERE alias_id = ?1",
+                [&alias.id],
+            )
+            .unwrap();
+        let key = derive_key(TEST_PHRASE).unwrap();
+        let command = AliasPayload {
+            collection_id: alias.collection_id.clone(),
+            collection_name: "shared".into(),
+            name: "same".into(),
+            command: "remote command".into(),
+            deleted: false,
+            updated_at: 10,
+        };
+        let details = library::MetadataPayload {
+            alias_id: alias.id.clone(),
+            metadata: Metadata {
+                description: "remote purpose".into(),
+                tags: vec!["remote".into()],
+                favorite: false,
+            },
+            updated_at: 10,
+        };
+        let records = serde_json::json!([
+            { "id": library::metadata_record_id(&alias.id), "record_type": "alias_metadata", "encrypted_blob": encrypt_record(&key, &details).unwrap(), "version": 2 },
+            { "id": alias.id, "record_type": "alias", "encrypted_blob": encrypt_record(&key, &command).unwrap(), "version": 3 }
+        ]);
+        let (url, server) = mock_sync_server(
+            1,
+            move |_, _, _| serde_json::json!({ "latest_version": 3, "records": records }),
+        );
+        let mut config = SyncConfig {
+            sync_url: url,
+            username: "testuser".into(),
+            user_id: "fixture".into(),
+            token: "fixture-only".into(),
+            latest_version: 0,
+        };
+        sync_aliases(&store, &mut config, TEST_PHRASE).unwrap();
+        server.join().unwrap();
+        let snapshot: String = store
+            .conn
+            .query_row("SELECT snapshot FROM conflict_backups", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let snapshot: Alias = serde_json::from_str(&snapshot).unwrap();
+        assert_eq!(snapshot.command, "local command");
+        assert_eq!(snapshot.metadata.description, "local purpose");
+        assert_eq!(snapshot.metadata.tags, vec!["local"]);
+        assert!(snapshot.metadata.favorite);
+        assert_eq!(store.metadata(&snapshot.id).unwrap(), details.metadata);
     }
 }

@@ -154,49 +154,30 @@ async function pushRecords(
     throw new HttpError(413, "too_many_records");
   }
 
-  let latestVersion = await syncState(env, session.user_id);
-  const pushed: Array<{ id: string; version: number }> = [];
-
-  for (const record of body.records) {
-    const normalized = validateUploadRecord(record);
-    const owner = await env.DB.prepare(
-      "SELECT user_id FROM vault_records WHERE id = ?1",
-    )
-      .bind(normalized.id)
-      .first<{ user_id: string }>();
-    if (owner && owner.user_id !== session.user_id) {
-      throw new HttpError(409, "record_id_conflict");
-    }
-
-    latestVersion += 1;
-    await env.DB.prepare(
+  // Validate before writing: malformed later entries cannot leave earlier writes behind.
+  const records = body.records.map(validateUploadRecord);
+  const statements = [env.DB.prepare(
+    "UPDATE sync_state SET latest_version = latest_version + ?2 WHERE user_id = ?1 RETURNING latest_version",
+  ).bind(session.user_id, records.length)];
+  for (const [index, record] of records.entries()) {
+    statements.push(env.DB.prepare(
       `INSERT INTO vault_records (id, user_id, record_type, encrypted_blob, version, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-       ON CONFLICT(id) DO UPDATE SET
+       SELECT ?1, ?2, ?3, ?4, latest_version - ?5 + ?6, ?7 FROM sync_state WHERE user_id = ?2
+       ON CONFLICT(user_id, id) DO UPDATE SET
          record_type = excluded.record_type,
          encrypted_blob = excluded.encrypted_blob,
          version = excluded.version,
-         updated_at = excluded.updated_at`,
-    )
-      .bind(
-        normalized.id,
-        session.user_id,
-        normalized.record_type,
-        normalized.encrypted_blob,
-        latestVersion,
-        normalized.updated_at,
-      )
-      .run();
-    pushed.push({ id: normalized.id, version: latestVersion });
+         updated_at = excluded.updated_at
+       RETURNING id, version`,
+    ).bind(record.id, session.user_id, record.record_type, record.encrypted_blob,
+           records.length, index + 1, record.updated_at));
   }
-
-  await env.DB.prepare(
-    "UPDATE sync_state SET latest_version = ?2 WHERE user_id = ?1",
-  )
-    .bind(session.user_id, latestVersion)
-    .run();
-
-  return json({ latest_version: latestVersion, records: pushed });
+  // D1 executes the entire batch as one transaction, including SQL version allocation.
+  const results = await env.DB.batch(statements);
+  const state = results[0].results?.[0] as { latest_version: number } | undefined;
+  if (!state) throw new Error("missing_sync_state");
+  const pushed = results.slice(1).map((result) => result.results?.[0]);
+  return json({ latest_version: state.latest_version, records: pushed });
 }
 
 async function readAccountRequest(
@@ -223,17 +204,18 @@ function validateUploadRecord(record: UploadRecord): {
   updated_at: number;
 } {
   if (
+    !record || typeof record !== "object" ||
     typeof record.id !== "string" ||
     typeof record.record_type !== "string" ||
     typeof record.encrypted_blob !== "string" ||
-    typeof record.updated_at !== "number"
+    typeof record.updated_at !== "number" || !Number.isSafeInteger(record.updated_at)
   ) {
     throw new HttpError(400, "invalid_record");
   }
   if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(record.id)) {
     throw new HttpError(400, "invalid_record_id");
   }
-  if (!["alias", "collection"].includes(record.record_type)) {
+  if (!["alias", "collection", "alias_metadata"].includes(record.record_type)) {
     throw new HttpError(400, "invalid_record_type");
   }
   if (record.encrypted_blob.length < 32 || record.encrypted_blob.length > 64_000) {
@@ -525,12 +507,11 @@ function corsHeaders(): HeadersInit {
 
 class HttpError extends Error {
   readonly isHttpError = true;
+  readonly status: number;
 
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
+  constructor(status: number, message: string) {
     super(message);
+    this.status = status;
   }
 }
 
